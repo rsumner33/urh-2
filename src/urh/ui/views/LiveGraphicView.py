@@ -1,47 +1,52 @@
-from PyQt5.QtCore import pyqtSignal, QEvent
-from PyQt5.QtGui import QWheelEvent, QMouseEvent
-
-from urh.ui.painting.GridScene import GridScene
-from urh.ui.views.ZoomableGraphicView import ZoomableGraphicView
+from PyQt5.QtCore import QRectF, pyqtSignal
+from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtWidgets import QGraphicsView
 
 
-class LiveGraphicView(ZoomableGraphicView):
-    freq_clicked = pyqtSignal(float)
-    wheel_event_triggered = pyqtSignal(QWheelEvent)
+class LiveGraphicView(QGraphicsView):
+    zoomed = pyqtSignal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.min_width = 100
+        self.max_width = "auto"
         self.capturing_data = True
-        self.setMouseTracking(True)
 
     def wheelEvent(self, event: QWheelEvent):
-        self.wheel_event_triggered.emit(event)
         if self.capturing_data:
             return
 
-        super().wheelEvent(event)
+        delta = event.angleDelta().y()
+        zoom_factor = 1.001 ** delta
+        p0scene = self.mapToScene(event.pos())
+        w = self.view_rect().width()
+        zooming_in = zoom_factor > 1
+        if zooming_in and w / zoom_factor < self.min_width:
+            return
 
-    def leaveEvent(self, event: QEvent):
-        super().leaveEvent(event)
-        if isinstance(self.scene(), GridScene):
-            self.scene().clear_frequency_marker()
+        max_width = self.max_width
+        if self.max_width == "auto":
+            max_width = self.sceneRect().width()
+        if not zooming_in and w / zoom_factor > max_width:
+            self.update()
+            return
 
-    def mouseMoveEvent(self, event: QMouseEvent):
-        super().mouseMoveEvent(event)
-        if isinstance(self.scene(), GridScene):
-            x = int(self.mapToScene(event.pos()).x())
-            freq = self.scene().get_freq_for_pos(x)
-            self.scene().draw_frequency_marker(x, freq)
-
-    def mousePressEvent(self, event: QMouseEvent):
-        if isinstance(self.scene(), GridScene):
-            freq = self.scene().get_freq_for_pos(int(self.mapToScene(event.pos()).x()))
-            if freq is not None:
-                self.freq_clicked.emit(freq)
+        self.scale(zoom_factor, 1)
+        p1mouse = self.mapFromScene(p0scene)
+        move = p1mouse - event.pos()
+        self.horizontalScrollBar().setValue(move.x() + self.horizontalScrollBar().value())
+        self.zoomed.emit(zoom_factor)
 
     def update(self, *__args):
-        try:
-            super().update(*__args)
-            super().show_full_scene()
-        except RuntimeError:
-            pass
+        super().update(*__args)
+
+        yscale = self.transform().m22()
+        self.resetTransform()
+        self.fitInView(self.sceneRect())
+        if yscale != 1.0:
+            self.scale(1, yscale / self.transform().m22())  # Restore YScale
+
+        self.horizontalScrollBar().blockSignals(False)
+
+    def view_rect(self) -> QRectF:
+        return self.mapToScene(self.rect()).boundingRect()

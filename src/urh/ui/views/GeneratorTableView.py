@@ -1,7 +1,6 @@
-from PyQt5.QtCore import Qt, QRect, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import Qt, QRect, pyqtSignal
 from PyQt5.QtGui import QDragMoveEvent, QDragEnterEvent, QPainter, QBrush, QColor, QPen, QDropEvent, QDragLeaveEvent, \
-    QContextMenuEvent, QIcon
-from PyQt5.QtWidgets import QActionGroup, QInputDialog
+    QContextMenuEvent
 
 from PyQt5.QtWidgets import QHeaderView, QAbstractItemView, QStyleOption, QMenu
 
@@ -12,7 +11,6 @@ from urh.ui.views.TableView import TableView
 class GeneratorTableView(TableView):
     create_fuzzing_label_clicked = pyqtSignal(int, int, int)
     edit_fuzzing_label_clicked = pyqtSignal(int)
-    encodings_updated = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,7 +18,7 @@ class GeneratorTableView(TableView):
         self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
 
-        self.drop_indicator_rect = QRect()
+        self.dropIndicatorRect = QRect()
         self.drag_active = False
         self.show_pause_active = False
         self.pause_row = -1
@@ -41,24 +39,23 @@ class GeneratorTableView(TableView):
         rect = self.visualRect(index)
         rect_left = self.visualRect(index.sibling(index.row(), 0))
         rect_right = self.visualRect(index.sibling(index.row(),
-                                                   self.horizontalHeader().logicalIndex(
-                                                       self.model().columnCount() - 1)))  # in case section has been moved
+            self.horizontalHeader().logicalIndex(self.model().columnCount() - 1)))  # in case section has been moved
 
-        self.drop_indicator_position = self.position(event.pos(), rect)
+        self.dropIndicatorPosition = self.position(event.pos(), rect)
 
-        if self.drop_indicator_position == self.AboveItem:
-            self.drop_indicator_rect = QRect(rect_left.left(), rect_left.top(), rect_right.right() - rect_left.left(), 0)
+        if self.dropIndicatorPosition == self.AboveItem:
+            self.dropIndicatorRect = QRect(rect_left.left(), rect_left.top(), rect_right.right() - rect_left.left(), 0)
             event.accept()
-        elif self.drop_indicator_position == self.BelowItem:
-            self.drop_indicator_rect = QRect(rect_left.left(), rect_left.bottom(), rect_right.right() - rect_left.left(),
-                                             0)
+        elif self.dropIndicatorPosition == self.BelowItem:
+            self.dropIndicatorRect = QRect(rect_left.left(), rect_left.bottom(), rect_right.right() - rect_left.left(),
+                0)
             event.accept()
-        elif self.drop_indicator_position == self.OnItem:
-            self.drop_indicator_rect = QRect(rect_left.left(), rect_left.bottom(), rect_right.right() - rect_left.left(),
-                                             0)
+        elif self.dropIndicatorPosition == self.OnItem:
+            self.dropIndicatorRect = QRect(rect_left.left(), rect_left.bottom(), rect_right.right() - rect_left.left(),
+                0)
             event.accept()
         else:
-            self.drop_indicator_rect = QRect()
+            self.dropIndicatorRect = QRect()
 
         # This is necessary or else the previously drawn rect won't be erased
         self.viewport().update()
@@ -68,8 +65,7 @@ class GeneratorTableView(TableView):
         # rect = self.visualRect(index)
         rect_left = self.visualRect(index.sibling(index.row(), 0))
         rect_right = self.visualRect(index.sibling(index.row(),
-                                                   self.horizontalHeader().logicalIndex(
-                                                       self.model().columnCount() - 1)))  # in case section has been moved
+            self.horizontalHeader().logicalIndex(self.model().columnCount() - 1)))  # in case section has been moved
         return QRect(rect_left.left(), rect_left.bottom(), rect_right.right() - rect_left.left(), 0)
 
     def dropEvent(self, event: QDropEvent):
@@ -77,10 +73,10 @@ class GeneratorTableView(TableView):
         row = self.rowAt(event.pos().y())
         index = self.model().createIndex(row, 0)  # this always get the default 0 column index
         rect = self.visualRect(index)
-        drop_indicator_position = self.position(event.pos(), rect)
+        dropIndicatorPosition = self.position(event.pos(), rect)
         if row == -1:
             row = self.model().row_count - 1
-        elif drop_indicator_position == self.BelowItem or drop_indicator_position == self.OnItem:
+        elif dropIndicatorPosition == self.BelowItem or dropIndicatorPosition == self.OnItem:
             row += 1
 
         self.model().dropped_row = row
@@ -93,8 +89,7 @@ class GeneratorTableView(TableView):
 
         super().dragLeaveEvent(event)
 
-    @staticmethod
-    def position(pos, rect):
+    def position(self, pos, rect):
         r = QAbstractItemView.OnViewport
         # margin*2 must be smaller than row height, or the drop onItem rect won't show
         margin = 5
@@ -112,14 +107,14 @@ class GeneratorTableView(TableView):
         super().paintEvent(event)
         painter = QPainter(self.viewport())
         # in original implementation, it calls an inline function paintDropIndicator here
-        self.paint_drop_indicator(painter)
-        self.paint_pause_indicator(painter)
+        self.paintDropIndicator(painter)
+        self.paintPauseIndicator(painter)
 
-    def paint_drop_indicator(self, painter):
+    def paintDropIndicator(self, painter):
         if self.drag_active:
             opt = QStyleOption()
             opt.initFrom(self)
-            opt.rect = self.drop_indicator_rect
+            opt.rect = self.dropIndicatorRect
             rect = opt.rect
 
             brush = QBrush(QColor(Qt.darkRed))
@@ -133,7 +128,7 @@ class GeneratorTableView(TableView):
                 painter.setPen(pen)
                 painter.drawRect(rect)
 
-    def paint_pause_indicator(self, painter):
+    def paintPauseIndicator(self, painter):
         if self.show_pause_active:
             rect = self.__rect_for_row(self.pause_row)
             brush = QBrush(QColor(Qt.darkGreen))
@@ -141,101 +136,45 @@ class GeneratorTableView(TableView):
             painter.setPen(pen)
             painter.drawLine(rect.topLeft(), rect.topRight())
 
-    def create_context_menu(self) -> QMenu:
-        assert self.context_menu_pos is not None
-        menu = QMenu()
-        selected_label_index = self.model().get_selected_label_index(row=self.rowAt(self.context_menu_pos.y()),
-                                                                     column=self.columnAt(self.context_menu_pos.x()))
-
-        if self.model().row_count > 0:
-            if selected_label_index == -1:
-                fuzzing_action = menu.addAction("Create fuzzing label...")
-                fuzzing_action.setIcon(QIcon.fromTheme("list-add"))
-            else:
-                fuzzing_action = menu.addAction("Edit fuzzing label...")
-                fuzzing_action.setIcon(QIcon.fromTheme("configure"))
-
-            fuzzing_action.triggered.connect(self.on_fuzzing_action_triggered)
-            menu.addSeparator()
-
-        add_message_action = menu.addAction("Add empty message...")
-        add_message_action.setIcon(QIcon.fromTheme("edit-table-insert-row-below"))
-        add_message_action.triggered.connect(self.on_add_message_action_triggered)
-
-        if not self.selection_is_empty:
-            menu.addAction(self.copy_action)
-
-        if self.model().row_count > 0:
-            duplicate_action = menu.addAction("Duplicate line")
-            duplicate_action.setIcon(QIcon.fromTheme("edit-table-insert-row-under"))
-            duplicate_action.triggered.connect(self.on_duplicate_action_triggered)
-
-            self._add_insert_column_menu(menu)
-
-            menu.addSeparator()
-            clear_action = menu.addAction("Clear table")
-            clear_action.triggered.connect(self.on_clear_action_triggered)
-            clear_action.setIcon(QIcon.fromTheme("edit-clear"))
-
-        self.encoding_actions = {}
-
-        if not self.selection_is_empty:
-            selected_encoding = self.model().protocol.messages[self.selected_rows[0]].decoder
-            for i in self.selected_rows:
-                if self.model().protocol.messages[i].decoder != selected_encoding:
-                    selected_encoding = None
-                    break
-
-            menu.addSeparator()
-            encoding_group = QActionGroup(self)
-            encoding_menu = menu.addMenu("Enforce encoding")
-
-            for decoding in self.model().decodings:
-                ea = encoding_menu.addAction(decoding.name)
-                ea.setCheckable(True)
-                ea.setActionGroup(encoding_group)
-                if selected_encoding == decoding:
-                    ea.setChecked(True)
-
-                self.encoding_actions[ea] = decoding
-                ea.triggered.connect(self.on_encoding_action_triggered)
-
-        return menu
-
     def contextMenuEvent(self, event: QContextMenuEvent):
-        self.context_menu_pos = event.pos()
-        menu = self.create_context_menu()
-        menu.exec_(self.mapToGlobal(event.pos()))
+        menu = QMenu()
+        pos = event.pos()
+        min_row, max_row, start, end = self.selection_range()
 
-    @pyqtSlot()
-    def on_fuzzing_action_triggered(self):
-        selected_label_index = self.model().get_selected_label_index(row=self.rowAt(self.context_menu_pos.y()),
-                                                                     column=self.columnAt(self.context_menu_pos.x()))
-        if selected_label_index == -1:
-            min_row, max_row, start, end = self.selection_range()
-            self.create_fuzzing_label_clicked.emit(min_row, start, end)
+        selected_label_indx = self.model().get_selected_label_index(self.columnAt(event.pos().x()))
+
+        if selected_label_indx == -1:
+            fuzzingAction = menu.addAction("Create Fuzzing Label...")
         else:
-            self.edit_fuzzing_label_clicked.emit(selected_label_index)
+            fuzzingAction = menu.addAction("Edit Fuzzing Label...")
 
-    @pyqtSlot()
-    def on_duplicate_action_triggered(self):
-        row = self.rowAt(self.context_menu_pos.y())
-        self.model().duplicate_row(row)
+        menu.addSeparator()
+        insertColLeft = menu.addAction("Add column on the left")
+        insertColRight = menu.addAction("Add column on the right")
+        duplicateAction = menu.addAction("Duplicate Line")
+        menu.addSeparator()
+        clearAction = menu.addAction("Clear Table")
 
-    @pyqtSlot()
-    def on_clear_action_triggered(self):
-        self.model().clear()
+        if min_row == -1:
+            fuzzingAction.setEnabled(False)
 
-    @pyqtSlot()
-    def on_encoding_action_triggered(self):
-        for row in self.selected_rows:
-            self.model().protocol.messages[row].decoder = self.encoding_actions[self.sender()]
-        self.encodings_updated.emit()
+        if self.model().col_count == 0:
+            clearAction.setEnabled(False)
 
-    @pyqtSlot()
-    def on_add_message_action_triggered(self):
-        row = self.rowAt(self.context_menu_pos.y())
-        num_bits, ok = QInputDialog.getInt(self, self.tr("How many bits shall the new message have?"),
-                                           self.tr("Number of bits:"), 42, 1)
-        if ok:
-            self.model().add_empty_row_behind(row, num_bits)
+        action = menu.exec_(self.mapToGlobal(pos))
+        if action == fuzzingAction:
+            if selected_label_indx == -1:
+                self.create_fuzzing_label_clicked.emit(min_row, start, end)
+            else:
+                self.edit_fuzzing_label_clicked.emit(selected_label_indx)
+        elif action == clearAction:
+            self.model().clear()
+        elif action == duplicateAction:
+            row = self.rowAt(event.pos().y())
+            self.model().duplicate_row(row)
+        elif action == insertColLeft:
+            col = self.columnAt(event.pos().x())
+            self.model().insert_column(col)
+        elif action == insertColRight:
+            col = self.columnAt(event.pos().x())
+            self.model().insert_column(col + 1)

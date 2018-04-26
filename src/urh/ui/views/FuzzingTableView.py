@@ -11,13 +11,13 @@ class FuzzingTableView(QTableView):
         super().__init__(parent)
 
     def resize_me(self):
-        QApplication.instance().setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         w = self.font().pointSize() + 2
         for i in range(10):
             self.setColumnWidth(i, 2 * w)
         for i in range(10, self.model().col_count):
             self.setColumnWidth(i, w * len(str(i + 1)))
-        QApplication.instance().restoreOverrideCursor()
+        QApplication.restoreOverrideCursor()
 
     def selection_range(self):
         """

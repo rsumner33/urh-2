@@ -1,76 +1,67 @@
-import array
-import copy
-from collections import defaultdict
-
-from PyQt5.QtCore import Qt, QModelIndex, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import Qt, QModelIndex
 from PyQt5.QtGui import QColor
 
 from urh import constants
 from urh.models.ProtocolTreeItem import ProtocolTreeItem
 from urh.models.TableModel import TableModel
-from urh.signalprocessing.ChecksumLabel import ChecksumLabel
-from urh.signalprocessing.Message import Message
-from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
 from urh.signalprocessing.ProtocolAnalyzerContainer import ProtocolAnalyzerContainer
-from urh.signalprocessing.Encoding import Encoding
 from urh.ui.actions.Clear import Clear
 from urh.ui.actions.DeleteBitsAndPauses import DeleteBitsAndPauses
 from urh.ui.actions.InsertBitsAndPauses import InsertBitsAndPauses
 from urh.ui.actions.InsertColumn import InsertColumn
-from urh.util import util
-from urh.util.Logger import logger
 
 
 class GeneratorTableModel(TableModel):
-    first_protocol_added = pyqtSignal(ProtocolAnalyzer)
-
-    def __init__(self, tree_root_item: ProtocolTreeItem, decodings, parent = None):
-        super().__init__(participants=[], parent=parent)
-        self.protocol = ProtocolAnalyzerContainer()
+    def __init__(self, tree_root_item: ProtocolTreeItem, modulators, decoders, parent = None):
+        super().__init__(parent)
+        self.protocol = ProtocolAnalyzerContainer(modulators, decoders)
         self.tree_root_item = tree_root_item
         self.dropped_row = -1
-
-        self.decodings = decodings  # type: list[Encoding]
 
         self.cfc = None
         self.is_writeable = True
         self.decode = False
         self.is_generator = True
 
-        self.edited_checksum_labels_by_row = defaultdict(set)
+    def refresh_bgcolors_and_tooltips(self):
+        self.background_colors.clear()
+        self.tooltips.clear()
+        label_colors = constants.LABEL_COLORS
 
-        self.data_edited.connect(self.on_data_edited)
+        for lbl in self.protocol.protocol_labels:
+            bg_color = label_colors[lbl.color_index]
+            for i in lbl.block_numbers:
+                start, end = self.protocol.get_label_range(lbl, self.proto_view, self.decode)
+                for j in range(start, end):
+                    self.background_colors[i, j] = bg_color
+                    self.tooltips[i, j] = lbl.name
 
     def refresh_fonts(self):
-        self.italic_fonts.clear()
         self.bold_fonts.clear()
         self.text_colors.clear()
         pac = self.protocol
-        assert isinstance(pac, ProtocolAnalyzerContainer)
-        for i, message in enumerate(pac.messages):
-            if message.fuzz_created:
-                for lbl in (lbl for lbl in message.message_type if lbl.fuzz_created):
-                    for j in range(*message.get_label_range(lbl=lbl, view=self.proto_view, decode=False)):
-                        self.bold_fonts[i, j] = True
+        for i, block in enumerate(pac.blocks):
+            fc = [pac.convert_range(start, end, 0, self.proto_view, False) for start, end in block.fuzz_created]
+            for f in fc:
+                for j in range(f[0], f[1]):
+                    self.bold_fonts[i, j] = True
 
-            for lbl in message.active_fuzzing_labels:
-                for j in range(*message.get_label_range(lbl=lbl, view=self.proto_view, decode=False)):
+        for lbl in pac.protocol_labels:
+            if lbl.active_fuzzing:
+                i = lbl.refblock
+                for j in range(*pac.get_label_range(lbl, self.proto_view, False)):
                     self.bold_fonts[i, j] = True
                     self.text_colors[i, j] = QColor("orange")
 
-            for lbl in (lbl for lbl in message.message_type if isinstance(lbl, ChecksumLabel)):
-                if lbl not in self.edited_checksum_labels_by_row[i] and not lbl.fuzz_created:
-                    self.__set_italic_font_for_label_range(row=i, label=lbl, italic=True)
-
-    def delete_range(self, msg_start: int, msg_end: int, index_start: int, index_end: int):
-        if msg_start > msg_end:
-            msg_start, msg_end = msg_end, msg_start
+    def delete_range(self, block_start: int, block_end: int, index_start: int, index_end: int):
+        if block_start > block_end:
+            block_start, block_end = block_end, block_start
         if index_start > index_end:
             index_start, index_end = index_end, index_start
 
-        remove_action = DeleteBitsAndPauses(self.protocol, msg_start, msg_end, index_start,
+        remove_action = DeleteBitsAndPauses(self.protocol, block_start, block_end, index_start,
                                             index_end, self.proto_view, False)
-        ########## Delete according pauses
+        ########## Zugehörige Pausen löschen
         self.undo_stack.push(remove_action)
 
     def flags(self, index: QModelIndex):
@@ -92,35 +83,27 @@ class GeneratorTableModel(TableModel):
         group_nodes = []
         file_nodes = []
         for index in indexes:
-            try:
-                row, column, parent = map(int, index.split(","))
-                if parent == -1:
-                    parent = self.tree_root_item
-                else:
-                    parent = self.tree_root_item.child(parent)
-                node = parent.child(row)
-                if node.is_group:
-                    group_nodes.append(node)
-                else:
-                    file_nodes.append(node)
-            except ValueError:
-                continue
+            row, column, parent = map(int, index.split(","))
+            if parent == -1:
+                parent = self.tree_root_item
+            else:
+                parent = self.tree_root_item.child(parent)
+            node = parent.child(row)
+            if node.is_group:
+                group_nodes.append(node)
+            else:
+                file_nodes.append(node)
 
         # Which Nodes to add?
-        nodes_to_add = []  # type: list[ProtocolTreeItem]
-
+        nodes_to_add = []
+        """:type: list of ProtocolTreeItem """
         for group_node in group_nodes:
             nodes_to_add.extend(group_node.children)
         nodes_to_add.extend([file_node for file_node in file_nodes if file_node not in nodes_to_add])
 
-        is_empty = self.row_count == 0
-
         for node in reversed(nodes_to_add):
             undo_action = InsertBitsAndPauses(self.protocol, self.dropped_row, node.protocol)
             self.undo_stack.push(undo_action)
-
-        if is_empty and self.row_count > 0:
-            self.first_protocol_added.emit(nodes_to_add[0].protocol)
 
         return True
 
@@ -132,83 +115,13 @@ class GeneratorTableModel(TableModel):
         self.protocol.duplicate_line(row)
         self.update()
 
-    def add_empty_row_behind(self, row_index: int, num_bits: int):
-        message = Message(plain_bits=[0]*num_bits,
-                          pause=constants.SETTINGS.value("default_fuzzing_pause", 10**6, int),
-                          message_type=self.protocol.default_message_type)
-
-        tmp_protocol = ProtocolAnalyzer(None)
-        tmp_protocol.messages = [message]
-        undo_action = InsertBitsAndPauses(self.protocol, row_index+1, tmp_protocol)
-        self.undo_stack.push(undo_action)
-
-    def get_selected_label_index(self, row: int, column: int):
-        if self.row_count == 0:
-            return -1
-
-        try:
-            msg = self.protocol.messages[row]
-        except IndexError:
-            logger.warning("{} is out of range for generator protocol".format(row))
-            return -1
-
-        for i, lbl in enumerate(msg.message_type):
-            if column in range(*msg.get_label_range(lbl, self.proto_view, False)):
+    def get_selected_label_index(self, selected_col: int):
+        for i, lbl in enumerate(self.protocol.protocol_labels):
+            if selected_col in range(*self.protocol.get_label_range(lbl, self.proto_view, False)):
                 return i
 
         return -1
 
-    def __set_italic_font_for_label_range(self, row, label, italic: bool):
-        message = self.protocol.messages[row]
-        for j in range(*message.get_label_range(lbl=label, view=self.proto_view, decode=False)):
-            self.italic_fonts[row, j] = italic
-
-    def update_checksums_for_row(self, row: int):
-        msg = self.protocol.messages[row]
-        for lbl in msg.message_type.checksum_labels:  # type: ChecksumLabel
-            if lbl.fuzz_created:
-                continue
-
-            self.__set_italic_font_for_label_range(row, lbl, italic=True)
-            self.edited_checksum_labels_by_row[row].discard(lbl)
-
-            calculated_checksum = lbl.calculate_checksum_for_message(msg, use_decoded_bits=False)
-            label_range = msg.get_label_range(lbl=lbl, view=0, decode=False)
-            start, end = label_range[0], label_range[1]
-            msg[start:end] = calculated_checksum + array.array("B", [0] * ((end - start) - len(calculated_checksum)))
-
-            label_range = msg.get_label_range(lbl=lbl, view=self.proto_view, decode=False)
-            start, end = label_range[0], label_range[1]
-            if self.proto_view == 0:
-                data = calculated_checksum
-            elif self.proto_view == 1:
-                data = util.aggregate_bits(calculated_checksum, size=4)
-            elif self.proto_view == 2:
-                data = util.aggregate_bits(calculated_checksum, size=8)
-            else:
-                data = array.array("B", [])
-
-            self.display_data[row][start:end] = data + array.array("B", [0] * ((end - start) - len(data)))
-
-    @pyqtSlot(int, int)
-    def on_data_edited(self, row: int, column: int):
-        edited_range = range(column, column+1)
-        message = self.protocol.messages[row]
-        checksum_labels = message.message_type.checksum_labels
-        if checksum_labels:
-            edited_checksum_labels = [lbl for lbl in checksum_labels
-                                      if any(j in edited_range
-                                             for j in range(*message.get_label_range(lbl=lbl,
-                                                                                     view=self.proto_view,
-                                                                                     decode=False)))]
-
-            if edited_checksum_labels:
-                for lbl in edited_checksum_labels:
-                    if lbl.fuzz_created:
-                        continue
-
-                    self.__set_italic_font_for_label_range(row, lbl, italic=False)
-                    self.edited_checksum_labels_by_row[row].add(lbl)
-            else:
-                self.update_checksums_for_row(row)
-
+    def insert_column(self, index: int):
+        insert_action = InsertColumn(self.protocol, index)
+        self.undo_stack.push(insert_action)

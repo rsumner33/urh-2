@@ -1,47 +1,51 @@
-from PyQt5.QtCore import pyqtSignal, Qt, pyqtSlot
-from PyQt5.QtGui import QContextMenuEvent, QKeyEvent, QIcon
-from PyQt5.QtWidgets import QListView, QMenu
+from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtGui import QContextMenuEvent, QKeyEvent
+from PyQt5.QtWidgets import  QListView, QMenu
 
 from urh.models.GeneratorListModel import GeneratorListModel
 
 
 class GeneratorListView(QListView):
+    editActionTriggered = pyqtSignal(int)
     selection_changed = pyqtSignal()
+    editAllActionTriggered = pyqtSignal()
     edit_on_item_triggered = pyqtSignal(int)
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.context_menu_pos = None
 
     def model(self) -> GeneratorListModel:
         return super().model()
 
-    def create_context_menu(self):
+    def contextMenuEvent(self, event: QContextMenuEvent):
         menu = QMenu()
-        if self.model().message is None or len(self.model().message.message_type) == 0:
-            return menu
+        pos = event.pos()
+        index = self.indexAt(pos)
+        if len(self.model().proto_container.protocol_labels) == 0:
+            return
 
-        edit_action = menu.addAction("Edit fuzzing label")
-        edit_action.setIcon(QIcon.fromTheme("configure"))
-        edit_action.triggered.connect(self.on_edit_action_triggered)
+        editAction = menu.addAction("Edit Fuzzing Label...")
+        delAction = 42
+        if index.isValid():
+            delAction = menu.addAction("Delete Fuzzing Label")
+        editAllAction = menu.addAction("Edit all Fuzzing Values...")
 
-        del_action = menu.addAction("Delete fuzzing label")
-        del_action.setIcon(QIcon.fromTheme("edit-delete"))
-        del_action.triggered.connect(self.on_delete_action_triggered)
 
         menu.addSeparator()
-        fuzz_all_action = menu.addAction("Check all")
-        fuzz_all_action.triggered.connect(self.model().fuzzAll)
-        unfuzz_all_action = menu.addAction("Uncheck all")
-        unfuzz_all_action.triggered.connect(self.model().unfuzzAll)
+        fuzzAllAction = menu.addAction("Check all")
+        unfuzzAllAction = menu.addAction("Uncheck all")
 
-        return menu
-
-    def contextMenuEvent(self, event: QContextMenuEvent):
-        self.context_menu_pos = event.pos()
-        menu = self.create_context_menu()
-        menu.exec(self.mapToGlobal(self.context_menu_pos))
-        self.context_menu_pos = None
+        action = menu.exec_(self.mapToGlobal(pos))
+        if action == delAction:
+            self.model().delete_label_at(index.row())
+        elif action == editAction:
+            self.editActionTriggered.emit(index.row())
+        elif action == fuzzAllAction:
+            self.model().fuzzAll()
+        elif action == unfuzzAllAction:
+            self.model().unfuzzAll()
+        elif action == editAllAction:
+            self.editAllActionTriggered.emit()
 
     def selectionChanged(self, QItemSelection, QItemSelection_1):
         self.selection_changed.emit()
@@ -59,12 +63,3 @@ class GeneratorListView(QListView):
         selected = [index.row() for index in self.selectedIndexes()]
         if len(selected) > 0:
             self.edit_on_item_triggered.emit(min(selected))
-
-    @pyqtSlot()
-    def on_delete_action_triggered(self):
-        index = self.indexAt(self.context_menu_pos)
-        self.model().delete_label_at(index.row())
-
-    @pyqtSlot()
-    def on_edit_action_triggered(self):
-        self.edit_on_item_triggered.emit(self.indexAt(self.context_menu_pos).row())

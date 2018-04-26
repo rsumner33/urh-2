@@ -1,133 +1,106 @@
+import copy
 import locale
 import os
-import time
-from datetime import datetime
 
 import numpy
+import sys
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt, pyqtSignal, QItemSelection, QItemSelectionModel, QLocale
-from PyQt5.QtGui import QContextMenuEvent, QIcon
-from PyQt5.QtWidgets import QMessageBox, QAbstractItemView, QUndoStack, QMenu, QWidget
+from PyQt5.QtGui import QContextMenuEvent, QDropEvent
+from PyQt5.QtWidgets import QMessageBox, QFrame, QAbstractItemView, QUndoStack, QApplication
 
 from urh import constants
-from urh.controller.dialogs.MessageTypeDialog import MessageTypeDialog
-from urh.controller.dialogs.ProtocolLabelDialog import ProtocolLabelDialog
+from urh.controller.OptionsController import OptionsController
+from urh.controller.ProtocolLabelController import ProtocolLabelController
+from urh.controller.ProtocolSniffDialogController import \
+    ProtocolSniffDialogController
 from urh.models.LabelValueTableModel import LabelValueTableModel
-from urh.models.ParticipantListModel import ParticipantListModel
 from urh.models.ProtocolLabelListModel import ProtocolLabelListModel
 from urh.models.ProtocolTableModel import ProtocolTableModel
 from urh.models.ProtocolTreeModel import ProtocolTreeModel
 from urh.plugins.PluginManager import PluginManager
-from urh.signalprocessing.Encoding import Encoding
-from urh.signalprocessing.Message import Message
-from urh.signalprocessing.MessageType import MessageType
 from urh.signalprocessing.ProtocoLabel import ProtocolLabel
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
+from urh.signalprocessing.ProtocolBlock import ProtocolBlock
+from urh.signalprocessing.encoding import encoding
 from urh.signalprocessing.ProtocolGroup import ProtocolGroup
-from urh.ui.delegates.ComboBoxDelegate import ComboBoxDelegate
-from urh.ui.ui_analysis import Ui_TabAnalysis
-from urh.util import FileOperator, util
+from urh.ui.ui_analysis_frame import Ui_FAnalysis
+from urh.util import FileOperator
+from urh.util.Errors import Errors
 from urh.util.Formatter import Formatter
-from urh.util.Logger import logger
 from urh.util.ProjectManager import ProjectManager
 
 
-class CompareFrameController(QWidget):
+class CompareFrameController(QFrame):
     show_interpretation_clicked = pyqtSignal(int, int, int, int)
     show_decoding_clicked = pyqtSignal()
     files_dropped = pyqtSignal(list)
-    participant_changed = pyqtSignal()
-    show_config_field_types_triggered = pyqtSignal()
-    load_protocol_clicked = pyqtSignal()
 
-    def __init__(self, plugin_manager: PluginManager, project_manager: ProjectManager, parent):
+    def __init__(self, plugin_manager: PluginManager,
+                 project_manager: ProjectManager, parent):
 
         super().__init__(parent)
 
         self.proto_analyzer = ProtocolAnalyzer(None)
         self.project_manager = project_manager
+        self.decodings = []
+        """:type: list of encoding """
 
-        self.ui = Ui_TabAnalysis()
+        self.load_decodings()
+
+        self.ui = Ui_FAnalysis()
         self.ui.setupUi(self)
-        util.set_splitter_stylesheet(self.ui.splitter)
-        util.set_splitter_stylesheet(self.ui.splitter_2)
-
         self.ui.lBitsSelection.setText("")
         self.ui.lDecimalSelection.setText("")
         self.ui.lHexSelection.setText("")
         self.plugin_manager = plugin_manager
-        self.decimal_point = QLocale().decimalPoint()
-
-        self.__selected_message_type = self.proto_analyzer.default_message_type
-        self.fill_message_type_combobox()
-
-        self.participant_list_model = ParticipantListModel(project_manager.participants)
-        self.ui.listViewParticipants.setModel(self.participant_list_model)
+        clocale = QLocale()
+        self.decimal_point = clocale.decimalPoint()
 
         self.__active_group_ids = [0]
-        self.selected_protocols = set()
 
-        self.search_select_search_menu = QMenu()
-        self.search_action = self.search_select_search_menu.addAction(self.tr("Search"))
-        self.select_action = self.search_select_search_menu.addAction(self.tr("Select all"))
-        self.filter_action = self.search_select_search_menu.addAction(self.tr("Filter"))
-        self.ui.btnSearchSelectFilter.setMenu(self.search_select_search_menu)
+        self.protocol_model = ProtocolTableModel(self.proto_analyzer, self)
+        """:type: ProtocolTableModel"""
+        self.protocol_label_list_model = ProtocolLabelListModel(self.proto_analyzer, controller=self)
+        """:type:  ProtocolLabelListModel"""
 
-        self.analyze_menu = QMenu()
-        self.assign_participants_action = self.analyze_menu.addAction(self.tr("Assign participants"))
-        self.assign_participants_action.setCheckable(True)
-        self.assign_participants_action.setChecked(True)
-        self.assign_message_type_action = self.analyze_menu.addAction(self.tr("Assign message type"))
-        self.assign_message_type_action.setCheckable(True)
-        self.assign_message_type_action.setChecked(True)
-        self.assign_labels_action = self.analyze_menu.addAction(self.tr("Assign labels"))
-        self.assign_labels_action.setCheckable(True)
-        self.assign_labels_action.setChecked(False)
-        self.ui.btnAnalyze.setMenu(self.analyze_menu)
-
-        self.ui.lblShownRows.hide()
-
-        self.protocol_model = ProtocolTableModel(self.proto_analyzer, project_manager.participants,
-                                                 self)  # type: ProtocolTableModel
-        self.protocol_label_list_model = ProtocolLabelListModel(self.proto_analyzer,
-                                                                controller=self)  # type: ProtocolLabelListModel
-
-        self.label_value_model = LabelValueTableModel(self.proto_analyzer,
-                                                      controller=self)  # type: LabelValueTableModel
+        self.label_value_model = LabelValueTableModel(self.proto_analyzer, controller=self)
         self.ui.tblViewProtocol.setModel(self.protocol_model)
         self.ui.tblViewProtocol.controller = self
         self.ui.tblLabelValues.setModel(self.label_value_model)
         self.ui.listViewLabelNames.setModel(self.protocol_label_list_model)
 
-        self.selection_timer = QTimer(self)
-        self.selection_timer.setSingleShot(True)
+        self.create_connects()
 
+        self.fill_decoding_combobox()
+        #self.ui.splitter.setStretchFactor(1, 1)
+
+        self.selection_timer = QTimer()
+        self.selection_timer.setSingleShot(True)
+        self.selection_timer.timeout.connect(self.on_table_selection_timer_timeout)
+        self.setFrameStyle(0)
+        self.ui.lSignalName.setText(self.tr("Compare your protocols here"))
+        self.ui.lSignalNr.setText("")
         self.setAcceptDrops(False)
 
-        self.proto_tree_model = ProtocolTreeModel(controller=self)  # type: ProtocolTreeModel
+        self.proto_tree_model = ProtocolTreeModel(controller=self)
+        """:type: ProtocolTreeModel """
+        self.proto_tree_model.item_dropped.connect(self.handle_item_in_proto_tree_dropped)
         self.ui.treeViewProtocols.setModel(self.proto_tree_model)
-
-        self.create_connects()
-        self.fill_decoding_combobox()
 
         self.rows_for_protocols = {}
         self.__protocols = None
 
         self.min_height = self.minimumHeight()
         self.max_height = self.maximumHeight()
+        self.__show_protocol_seperation = True
 
-        self.__set_decoding_error_label(None)
-
-        self.__set_default_message_type_ui_status()
-
-    # region properties
-
-    @property
-    def field_types(self):
-        return self.project_manager.field_types
-
-    @property
-    def field_types_by_caption(self):
-        return self.project_manager.field_types_by_caption
+        self.protocol_model.ref_index_changed.connect(self.handle_ref_index_changed)
+        self.ui.tblViewProtocol.row_visibilty_changed.connect(self.set_shown_protocols)
+        self.proto_tree_model.labels_on_group_dropped.connect(self.add_labels_to_group)
+        self.ui.treeViewProtocols.selection_changed.connect(self.handle_tree_view_selection_changed)
+        self.proto_tree_model.group_deleted.connect(self.handle_group_deleted)
+        self.proto_tree_model.proto_to_group_added.connect(self.expand_group_node)
+        self.proto_tree_model.group_added.connect(self.handle_group_added)
 
     @property
     def active_group_ids(self):
@@ -141,6 +114,7 @@ class CompareFrameController(QWidget):
     @active_group_ids.setter
     def active_group_ids(self, val: list):
         self.__active_group_ids = val
+
 
     @property
     def groups(self):
@@ -159,33 +133,74 @@ class CompareFrameController(QWidget):
         """
         return [self.proto_tree_model.group_at(i) for i in self.active_group_ids]
 
-    @property
-    def active_message_type(self) -> MessageType:
-        return self.__selected_message_type
 
-    @active_message_type.setter
-    def active_message_type(self, val: MessageType):
-        if val not in self.proto_analyzer.message_types:
-            logger.error("Message type {} not in mesage types".format(val.name))
+    def handle_files_dropped(self, files: list):
+        self.files_dropped.emit(files)
+
+
+    def load_decodings(self):
+        if self.project_manager.project_file:
+            prefix = os.path.realpath(os.path.dirname(
+                self.project_manager.project_file))
+        else:
+            prefix = os.path.realpath(os.path.join(constants.SETTINGS.fileName(), ".."))
+
+        fallback = [encoding(["Non Return To Zero (NRZ)"]),
+
+                    encoding(["Non Return To Zero Inverted (NRZ-I)",
+                              constants.DECODING_INVERT]),
+
+                    encoding(["Manchester I",
+                              constants.DECODING_EDGE]),
+
+                    encoding(["Manchester II",
+                              constants.DECODING_EDGE,
+                              constants.DECODING_INVERT]),
+
+                    encoding(["Differential Manchester",
+                              constants.DECODING_EDGE,
+                              constants.DECODING_DIFFERENTIAL])
+                    ]
+
+
+        try:
+            f = open(os.path.join(prefix, constants.DECODINGS_FILE), "r")
+        except FileNotFoundError:
+            self.decodings = fallback
             return
 
-        self.__selected_message_type = val
+        if not f:
+            self.decodings = fallback
+            return
 
-        self.ui.cbMessagetypes.blockSignals(True)
-        self.ui.cbMessagetypes.setCurrentIndex(self.proto_analyzer.message_types.index(val))
-        self.__set_default_message_type_ui_status()
-        self.protocol_label_list_model.update()
-        self.ui.cbMessagetypes.blockSignals(False)
+        self.decodings = []
+        """:type: list of encoding """
 
-        self.update_field_type_combobox()
+        for line in f:
+            tmp_conf = []
+            for j in line.split(","):
+                tmp = j.strip()
+                tmp = tmp.replace("'", "")
+                if not "\n" in tmp and tmp != "":
+                    tmp_conf.append(tmp)
+            self.decodings.append(encoding(tmp_conf))
+        f.close()
 
-    @property
-    def selected_messages(self):
-        return self.ui.tblViewProtocol.selected_messages
+        if len(self.decodings) == 0:
+            self.decodings = fallback
+
 
     @property
     def protocol_undo_stack(self) -> QUndoStack:
         return self.protocol_model.undo_stack
+
+    @property
+    def name(self):
+        return self.ui.lSignalName.text()
+
+    @name.setter
+    def name(self, value: str):
+        self.ui.lSignalName.setText(value)
 
     @property
     def protocols(self):
@@ -199,7 +214,6 @@ class CompareFrameController(QWidget):
     @property
     def protocol_list(self):
         """
-        :return: visible protocols
         :rtype: list of ProtocolAnalyzer
         """
         result = []
@@ -208,178 +222,47 @@ class CompareFrameController(QWidget):
         return result
 
     @property
-    def full_protocol_list(self):
-        """
-        :return: all protocols including not shown ones
-        :rtype: list of ProtocolAnalyzer
-        """
-        result = []
-        for group in self.groups:
-            result.extend(group.all_protocols)
-        return result
+    def show_protocol_seperation(self):
+        return self.__show_protocol_seperation
 
-    # endregion
+    @show_protocol_seperation.setter
+    def show_protocol_seperation(self, value: bool):
+        self.__show_protocol_seperation = value
 
-    def __set_decoding_error_label(self, message: Message):
-        if message:
-            errors = message.decoding_errors
-            percent = 100 * (errors / len(message))
-            state = message.decoding_state if message.decoding_state != message.decoder.ErrorState.SUCCESS else ""
-            color = "green" if errors == 0 and state == "" else "red"
+        if not value:
+            for line in self.protocol_model.first_blocks:
+                self.ui.tblViewProtocol.setRowHeight(line, constants.SEPARATION_ROW_HEIGHT)
 
-            self.ui.lDecodingErrorsValue.setStyleSheet("color: " + color)
-            self.ui.lDecodingErrorsValue.setText(locale.format_string("%d (%.02f%%) %s", (errors, percent, state)))
-        else:
-            self.ui.lDecodingErrorsValue.setText("No message selected")
+        self.set_shown_protocols()
 
     def create_connects(self):
         self.protocol_undo_stack.indexChanged.connect(self.on_undo_stack_index_changed)
+
+        self.ui.btnSelectAll.clicked.connect(self.select_all_search_results)
+        self.ui.cbShowDiffs.stateChanged.connect(self.on_chkbox_show_differences_changed)
         self.ui.cbProtoView.currentIndexChanged.connect(self.on_protocol_view_changed)
-        self.ui.cbDecoding.currentIndexChanged.connect(self.on_combobox_decoding_current_index_changed)
-        self.ui.cbShowDiffs.clicked.connect(self.on_chkbox_show_differences_clicked)
-        self.ui.chkBoxOnlyShowLabelsInProtocol.stateChanged.connect(self.on_check_box_show_only_labels_state_changed)
-        self.ui.chkBoxShowOnlyDiffs.stateChanged.connect(self.on_check_box_show_only_diffs_state_changed)
-
-        self.protocol_model.vertical_header_color_status_changed.connect(
-            self.ui.tblViewProtocol.on_vertical_header_color_status_changed)
-
-        self.ui.tblViewProtocol.show_interpretation_clicked.connect(self.show_interpretation_clicked.emit)
         self.ui.tblViewProtocol.protocol_view_change_clicked.connect(self.ui.cbProtoView.setCurrentIndex)
-        self.ui.tblViewProtocol.selection_changed.connect(self.on_table_selection_changed)
-        self.ui.tblViewProtocol.writeable_changed.connect(self.on_writeable_changed)
-        self.ui.tblViewProtocol.row_visibility_changed.connect(self.on_tbl_view_protocol_row_visibility_changed)
+        self.ui.cbDecoding.currentIndexChanged.connect(self.on_cbDecoding_currentIndexChanged)
+        self.ui.tblViewProtocol.show_interpretation_clicked.connect(self.show_interpretation_clicked.emit)
+        self.ui.btnFind.clicked.connect(self.search)
+        self.ui.btnNextSearch.clicked.connect(self.next_search_result)
+        self.ui.btnPrevSearch.clicked.connect(self.prev_search_result)
+        self.ui.cbSearchType.currentIndexChanged.connect(self.clear_search)
+        self.protocol_label_list_model.protolabel_visibility_changed.connect(self.set_protocol_label_visibility)
+        self.protocol_label_list_model.protolabel_visibility_changed.connect(self.label_value_model.update)
+        self.ui.btnSaveProto.clicked.connect(self.save_protocol)
+        self.ui.tblViewProtocol.selection_changed.connect(self.handle_table_selection_changed)
+        self.ui.listViewLabelNames.editActionTriggered.connect(self.show_protocol_labels)
+        self.ui.tblViewProtocol.writeable_changed.connect(self.handle_writeable_changed)
+        self.protocol_label_list_model.label_removed.connect(self.handle_label_removed)
+        self.ui.listViewLabelNames.selection_changed.connect(self.handle_label_selection_changed)
+        self.ui.chkBoxOnlyShowLabelsInProtocol.stateChanged.connect(self.handle_show_only_checkbox_changed)
+        self.ui.chkBoxShowOnlyDiffs.stateChanged.connect(self.handle_show_only_checkbox_changed)
+        self.protocol_model.ref_index_changed.connect(self.handle_show_only_checkbox_changed)
+        self.ui.tblViewProtocol.row_visibilty_changed.connect(self.handle_show_only_checkbox_changed)
         self.ui.tblViewProtocol.edit_label_clicked.connect(self.on_edit_label_clicked_in_table)
-        self.ui.tblViewProtocol.participant_changed.connect(self.on_participant_edited)
-        self.ui.tblViewProtocol.messagetype_selected.connect(self.on_message_type_selected)
-        self.ui.tblViewProtocol.new_messagetype_clicked.connect(self.on_table_new_message_type_clicked)
-        self.ui.tblViewProtocol.files_dropped.connect(self.on_files_dropped)
-
-        self.ui.tblLabelValues.edit_label_action_triggered.connect(self.on_edit_label_action_triggered)
-
-        self.ui.btnSearchSelectFilter.clicked.connect(self.on_btn_search_clicked)
-        self.ui.btnNextSearch.clicked.connect(self.on_btn_next_search_clicked)
-        self.ui.btnPrevSearch.clicked.connect(self.on_btn_prev_search_clicked)
-        self.ui.lineEditSearch.returnPressed.connect(self.ui.btnSearchSelectFilter.click)
-        self.search_action.triggered.connect(self.on_search_action_triggered)
-        self.select_action.triggered.connect(self.on_select_action_triggered)
-        self.filter_action.triggered.connect(self.on_filter_action_triggered)
-        self.ui.lblShownRows.linkActivated.connect(self.on_label_shown_link_activated)
-
-        self.protocol_label_list_model.protolabel_visibility_changed.connect(self.on_protolabel_visibility_changed)
-        self.protocol_label_list_model.protocol_label_name_edited.connect(self.label_value_model.update)
-        self.protocol_label_list_model.label_removed.connect(self.on_label_removed)
-
-        self.ui.btnSaveProto.clicked.connect(self.on_btn_save_protocol_clicked)
-        self.ui.btnLoadProto.clicked.connect(self.on_btn_load_proto_clicked)
-
         self.ui.btnAnalyze.clicked.connect(self.on_btn_analyze_clicked)
-
-        self.ui.listViewLabelNames.editActionTriggered.connect(self.on_edit_label_action_triggered)
-        self.ui.listViewLabelNames.configureActionTriggered.connect(self.show_config_field_types_triggered.emit)
-        self.ui.listViewLabelNames.auto_message_type_update_triggered.connect(
-            self.update_automatic_assigned_message_types)
-        self.ui.listViewLabelNames.selection_changed.connect(self.on_label_selection_changed)
-
-        self.protocol_model.ref_index_changed.connect(self.on_ref_index_changed)
-
-        self.project_manager.project_updated.connect(self.on_project_updated)
-        self.participant_list_model.show_state_changed.connect(self.on_participant_show_state_changed)
-
-        self.ui.btnAddMessagetype.clicked.connect(self.on_btn_new_message_type_clicked)
-        self.ui.btnRemoveMessagetype.clicked.connect(self.on_btn_remove_message_type_clicked)
-
-        self.ui.cbMessagetypes.currentIndexChanged.connect(self.on_combobox_messagetype_index_changed)
-        self.ui.cbMessagetypes.editTextChanged.connect(self.on_message_type_name_edited)
-
-        self.ui.btnMessagetypeSettings.clicked.connect(self.on_btn_message_type_settings_clicked)
-        self.selection_timer.timeout.connect(self.on_table_selection_timer_timeout)
-        self.ui.treeViewProtocols.selection_changed.connect(self.on_tree_view_selection_changed)
-        self.proto_tree_model.item_dropped.connect(self.on_item_in_proto_tree_dropped)
-
-        self.proto_tree_model.group_deleted.connect(self.on_group_deleted)
-        self.proto_tree_model.proto_to_group_added.connect(self.on_proto_to_group_added)
-
-    def get_message_type_for_label(self, lbl: ProtocolLabel) -> MessageType:
-        return next((msg_type for msg_type in self.proto_analyzer.message_types if lbl in msg_type), None)
-
-    def update_field_type_combobox(self):
-        field_types = [ft.caption for ft in self.field_types]
-        self.ui.listViewLabelNames.setItemDelegate(ComboBoxDelegate(field_types, is_editable=True, return_index=False))
-
-    def set_decoding(self, decoding: Encoding, messages=None):
-        """
-
-        :param decoding:
-        :param messages: None = set for all messages
-        :return:
-        """
-        if decoding is None:
-            self.show_decoding_clicked.emit()
-        else:
-            if messages is None:
-                messages = self.proto_analyzer.messages
-                if len(messages) > 10:
-                    reply = QMessageBox.question(self, "Set decoding",
-                                                 "Do you want to apply the selected decoding to {} messages?".format(
-                                                     len(messages)), QMessageBox.Yes | QMessageBox.No)
-                    if reply != QMessageBox.Yes:
-                        self.ui.cbDecoding.blockSignals(True)
-                        self.ui.cbDecoding.setCurrentText("...")
-                        self.ui.cbDecoding.blockSignals(False)
-                        return
-
-            self.show_all_cols()
-
-            for msg in messages:
-                msg.decoder = decoding
-
-            self.clear_search()
-
-            selected = self.ui.tblViewProtocol.selectionModel().selection()
-
-            if not selected.isEmpty() and self.isVisible() and self.proto_analyzer.num_messages > 0:
-                min_row = min(rng.top() for rng in selected)
-                min_row = min_row if min_row < len(self.proto_analyzer.messages) else -1
-                try:
-                    msg = self.proto_analyzer.messages[min_row]
-                except IndexError:
-                    msg = None
-                self.__set_decoding_error_label(msg)
-            else:
-                self.__set_decoding_error_label(None)
-
-            self.protocol_model.update()
-            self.protocol_label_list_model.update()
-            self.label_value_model.update()
-
-            for lbl in self.proto_analyzer.protocol_labels:
-                self.set_protocol_label_visibility(lbl)
-
-            self.ui.tblViewProtocol.resize_columns()
-
-    @property
-    def decodings(self):
-        return self.project_manager.decodings
-
-    def refresh_existing_encodings(self):
-        """
-        Refresh existing encodings for messages, when encoding was changed by user in dialog
-
-        :return:
-        """
-        update = False
-
-        for msg in self.proto_analyzer.messages:
-            i = next((i for i, d in enumerate(self.decodings) if d.name == msg.decoder.name), 0)
-            if msg.decoder != self.decodings[i]:
-                update = True
-                msg.decoder = self.decodings[i]
-                msg.clear_decoded_bits()
-                msg.clear_encoded_bits()
-
-        if update:
-            self.protocol_model.update()
-            self.label_value_model.update()
+        self.ui.tblViewProtocol.files_dropped.connect(self.handle_files_dropped)
 
     def fill_decoding_combobox(self):
         cur_item = self.ui.cbDecoding.currentText() if self.ui.cbDecoding.count() > 0 else None
@@ -395,94 +278,106 @@ class CompareFrameController(QWidget):
         self.ui.cbDecoding.setCurrentIndex(prev_index)
         self.ui.cbDecoding.blockSignals(False)
 
-    def fill_message_type_combobox(self):
-        self.ui.cbMessagetypes.blockSignals(True)
-        self.ui.cbMessagetypes.clear()
-        for message_type in self.proto_analyzer.message_types:
-            self.ui.cbMessagetypes.addItem(message_type.name)
-        self.ui.cbMessagetypes.blockSignals(False)
-        if self.ui.cbMessagetypes.count() <= 1:
-            self.ui.cbMessagetypes.setEditable(False)
+    def on_chkbox_show_differences_changed(self):
+        chkd = self.ui.cbShowDiffs.isChecked()
+
+        if chkd:
+            if self.protocol_model.refindex == -1:
+                self.protocol_model.refindex = 0
+        else:
+            self.ui.chkBoxShowOnlyDiffs.setChecked(False)
+            self.protocol_model.refindex = -1
+
+    def mousePressEvent(self, event):
+        return
+
+    def get_block_numbers_for_groups(self) -> dict:
+        result = {}
+        prev = 0
+        for i in sorted(self.protocols.keys()):
+            group_protos = self.protocols[i]
+            num_blocks = prev
+            for gp in group_protos:
+                if gp.show:
+                    num_blocks += gp.num_blocks
+            result[i] = (prev, num_blocks)
+            prev = num_blocks
+        return result
+
+    def get_blocks_of_active_groups(self):
+        bnfg = self.get_block_numbers_for_groups()
+        result = [self.proto_analyzer.blocks[r] for i, rng in bnfg.items() for r in range(*rng) if i in
+                  self.active_group_ids]
+
+        for i, rng in bnfg.items():
+            if i in self.active_group_ids:
+                result.extend(self.proto_analyzer.blocks[rng[0]:rng[1]])
+
+        return result
 
     def add_protocol(self, protocol: ProtocolAnalyzer, group_id: int = 0) -> ProtocolAnalyzer:
         self.__protocols = None
-        self.proto_tree_model.add_protocol(protocol, group_id)
+        group =self.proto_tree_model.add_protocol(protocol, group_id)
+        protocol.decoder = group.decoding
         protocol.qt_signals.protocol_updated.connect(self.set_shown_protocols)
         if protocol.signal:
             protocol.signal.sample_rate_changed.connect(self.set_shown_protocols)  # Refresh times
         protocol.qt_signals.show_state_changed.connect(self.set_shown_protocols)
-        protocol.qt_signals.show_state_changed.connect(self.filter_search_results)
         for i in range(self.proto_tree_model.ngroups):
             self.expand_group_node(i)
         return protocol
 
-    def add_protocol_from_file(self, filename: str) -> ProtocolAnalyzer:
+    def add_protocol_from_file(self, filename: str):
         """
 
         :rtype: list of ProtocolAnalyzer
         """
-        pa = ProtocolAnalyzer(signal=None, filename=filename)
-        pa.message_types = []
+        try:
+            view, groups, symbols = ProtocolAnalyzer.from_file(filename)
+        except Exception as e:
+            QMessageBox.critical(self, self.tr("Error while loading protocol file"), e.args[0])
+            return None
 
-        pa.from_xml_file(filename=filename, read_bits=True)
-        for messsage_type in pa.message_types:
-            if messsage_type not in self.proto_analyzer.message_types:
-                if messsage_type.name in (mt.name for mt in self.proto_analyzer.message_types):
-                    messsage_type.name += " (" + os.path.split(filename)[1].rstrip(".xml").rstrip(".proto") + ")"
-                self.proto_analyzer.message_types.append(messsage_type)
+        protolist = []
+        for i, group_data in enumerate(groups):
+            name = group_data["name"]
+            self.proto_tree_model.addGroup(name)
+            group = self.proto_tree_model.groups[-1]
+            try:
+                group.decoding = self.decodings[group_data["decoding_index"]]
+                group.loaded_from_file = True
+            except IndexError:
+                pass
+            pa = ProtocolAnalyzer(None)
+            pa.used_symbols = symbols
+            pa.name = "Protocol " + str(i)
+            pa.filename = filename
+            pa.blocks = group_data["blocks"]
+            self.add_protocol(pa, group_id=self.proto_tree_model.ngroups - 1)
+            protolist.append(pa)
 
-        self.fill_message_type_combobox()
-        self.add_protocol(protocol=pa)
+            for lbl in group_data["labels"]:
+                group.add_label(lbl, refresh=False)
+
+        if protolist:
+            self.ui.cbDecoding.blockSignals(True)
+            try:
+                self.ui.cbDecoding.setCurrentIndex(groups[0]["decoding_index"])
+            except IndexError:
+                pass
+            self.ui.cbDecoding.blockSignals(False)
 
         self.set_shown_protocols()
-        return pa
+        self.ui.cbProtoView.setCurrentIndex(view)
 
-    def add_sniffed_protocol_messages(self, messages: list):
-        if len(messages) > 0:
+        return protolist
+
+    def add_sniffed_protocol_blocks(self, blocks: list):
+        if len(blocks) > 0:
             proto_analyzer = ProtocolAnalyzer(None)
-            proto_analyzer.name = datetime.fromtimestamp(messages[0].timestamp).strftime("%Y-%m-%d %H:%M:%S")
-            proto_analyzer.messages = messages
-            self.add_protocol(proto_analyzer, group_id=self.proto_tree_model.ngroups - 1)
+            proto_analyzer.blocks = copy.deepcopy(blocks)
+            self.add_protocol(proto_analyzer)
             self.refresh()
-
-    def add_protocol_label(self, start: int, end: int, messagenr: int, proto_view: int, edit_label_name=True):
-        # Ensure atleast one Group is active
-        start, end = self.proto_analyzer.convert_range(start, end, proto_view, 0, decoded=True, message_indx=messagenr)
-        message_type = self.proto_analyzer.messages[messagenr].message_type
-        try:
-            used_field_types = [lbl.field_type for lbl in message_type]
-            first_unused_type = next(ft for ft in self.field_types if ft not in used_field_types)
-            name = first_unused_type.caption
-        except (StopIteration, AttributeError):
-            first_unused_type, name = None, None
-
-        proto_label = message_type.add_protocol_label(start=start, end=end, name=name, type=first_unused_type)
-
-        self.protocol_label_list_model.update()
-        self.protocol_model.update()
-
-        if edit_label_name:
-            try:
-                index = self.protocol_label_list_model.message_type.index(proto_label)
-                self.ui.listViewLabelNames.edit(self.protocol_label_list_model.createIndex(index, 0))
-            except ValueError:
-                pass
-
-        self.label_value_model.update()
-
-        return True
-
-    def add_message_type(self, selected_messages: list = None):
-        selected_messages = selected_messages if isinstance(selected_messages, list) else []
-        self.proto_analyzer.add_new_message_type(labels=self.proto_analyzer.default_message_type)
-        self.fill_message_type_combobox()
-        self.ui.cbMessagetypes.setEditable(True)
-        self.active_message_type = self.proto_analyzer.message_types[-1]
-        for msg in selected_messages:
-            msg.message_type = self.active_message_type
-        self.ui.cbMessagetypes.setFocus()
-        self.ui.btnRemoveMessagetype.show()
-        self.protocol_model.update()
 
     def remove_protocol(self, protocol: ProtocolAnalyzer):
         self.__protocols = None
@@ -495,6 +390,10 @@ class CompareFrameController(QWidget):
         self.set_shown_protocols()
 
     def set_shown_protocols(self):
+        # Instant Visual Refresh of Tree
+        self.proto_tree_model.layoutChanged.emit()
+        QApplication.processEvents()
+
         hidden_rows = {i for i in range(self.protocol_model.row_count) if self.ui.tblViewProtocol.isRowHidden(i)}
         relative_hidden_row_positions = {}
         for proto in self.rows_for_protocols.keys():
@@ -504,55 +403,53 @@ class CompareFrameController(QWidget):
                                                         i in self.rows_for_protocols[proto]]
 
         # self.protocol_undo_stack.clear()
-        self.proto_analyzer.messages[:] = []
+        self.proto_analyzer.blocks[:] = []
+        self.proto_analyzer.used_symbols.clear()
         self.rows_for_protocols.clear()
-        align_labels = constants.SETTINGS.value("align_labels", True, bool)
         line = 0
-        first_msg_indices = []
+        first_block_indices = []
         prev_line = 0
         for proto in self.protocol_list:
             abs_time = 0
             rel_time = 0
-            if proto.show and proto.messages:
-                num_messages = 0
-                for i, message in enumerate(proto.messages):
-                    if not message:
+            if proto.show:
+                for i, block in enumerate(proto.blocks):
+                    if not block:
                         continue
 
-                    message.align_labels = align_labels
                     try:
-                        if hasattr(proto.signal, "sample_rate"):
-                            if i > 0:
-                                rel_time = proto.messages[i - 1].get_duration(proto.signal.sample_rate)
-                                abs_time += rel_time
-                        else:
-                            # No signal, loaded from protocol file
-                            abs_time = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")
-                            if i > 0:
-                                rel_time = message.timestamp - proto.messages[i-1].timestamp
+                        tmp = abs_time
+                        abs_time = proto.bit_sample_pos[i][0] / proto.signal.sample_rate
+                        rel_time = abs_time - tmp
                     except IndexError:
-                        pass
+                        pass  # No signal, loaded from protocol file
 
-                    message.absolute_time = abs_time
-                    message.relative_time = rel_time
+                    block.absolute_time = abs_time
+                    block.relative_time = rel_time
 
-                    num_messages += 1
-                    if message.message_type not in self.proto_analyzer.message_types:
-                        message.message_type = self.proto_analyzer.default_message_type
-                    self.proto_analyzer.messages.append(message)
+                    self.proto_analyzer.blocks.append(block)
 
-                line += num_messages
+                self.proto_analyzer.used_symbols |= proto.used_symbols
+
+                line += proto.num_blocks
                 rows_for_cur_proto = list(range(prev_line, line))
                 self.rows_for_protocols[proto] = rows_for_cur_proto[:]
 
+
                 prev_line = line
-                if line != 0:
-                    first_msg_indices.append(line)
+                first_block_indices.append(line)
 
-        # apply hidden rows to new order
-        for i in range(self.protocol_model.row_count):
-            self.ui.tblViewProtocol.showRow(i)
+        for group in self.groups:
+            if not group.loaded_from_file:
+                group.refresh_labels()
 
+        if not self.show_protocol_seperation:
+            self.protocol_model.first_blocks[:] = []
+            self.updateUI()
+            return
+
+        # Hidden Rows auf neue Reihenfolge übertragen
+        [self.ui.tblViewProtocol.showRow(i) for i in range(self.protocol_model.row_count)]
         self.protocol_model.hidden_rows.clear()
         for proto in relative_hidden_row_positions.keys():
             try:
@@ -560,27 +457,45 @@ class CompareFrameController(QWidget):
                 for rel_pos in relative_hidden_row_positions[proto]:
                     self.ui.tblViewProtocol.hideRow(start + rel_pos)
                     self.protocol_model.hidden_rows.add(start + rel_pos)
-            except (KeyError, ValueError):
+            except KeyError:
                 pass
 
-        # consider hidden rows
-        for i in range(self.protocol_model.row_count):
-            if self.ui.tblViewProtocol.isRowHidden(i) and i in first_msg_indices:
-                indx = first_msg_indices.index(i)
-                first_msg_indices[indx] += 1
-                try:
-                    if first_msg_indices[indx] >= first_msg_indices[indx + 1]:
-                        del first_msg_indices[indx]
-                except IndexError:
-                    pass
 
-        for line in first_msg_indices:
+        # Hidden Rows berücksichtigen
+        for i in range(self.protocol_model.row_count):
+            if self.ui.tblViewProtocol.isRowHidden(i) and i in first_block_indices:
+                indx = first_block_indices.index(i)
+                first_block_indices[indx] += 1
+                if indx < len(first_block_indices) and first_block_indices[indx] >= first_block_indices[indx+1]:
+                    del first_block_indices[indx]
+
+        for line in first_block_indices:
             self.ui.tblViewProtocol.setRowHeight(line, constants.SEPARATION_ROW_HEIGHT)
 
-        self.protocol_model.first_messages = first_msg_indices[:]
+        self.protocol_model.first_blocks = first_block_indices[:]
+        #self.set_decoding(self.decodings[self.ui.cbDecoding.currentIndex()])
 
         self.updateUI()
-        self.show_differences(self.ui.cbShowDiffs.isChecked())
+        self.on_chkbox_show_differences_changed()
+
+    @pyqtSlot()
+    def on_protocol_view_changed(self):
+        old_view = self.protocol_model.proto_view
+        selected_indexes = self.ui.tblViewProtocol.selectionModel().selectedIndexes()
+        sel_cols = [index.column() for index in selected_indexes]
+        sel_rows = [index.row() for index in selected_indexes]
+
+        self.show_all_cols()
+        self.protocol_model.proto_view = self.ui.cbProtoView.currentIndex()
+        self.clear_search()
+
+        for group in self.groups:
+            for lbl in group.labels:
+                self.set_protocol_label_visibility(lbl, group)
+
+        self.handle_show_only_checkbox_changed()
+
+        self.restore_selection(old_view, sel_cols, sel_rows)
 
     def restore_selection(self, old_view: int, sel_cols, sel_rows):
         if len(sel_cols) == 0 or len(sel_rows) == 0:
@@ -590,12 +505,9 @@ class CompareFrameController(QWidget):
         startRow, endRow = numpy.min(sel_rows), numpy.max(sel_rows)
         new_view = self.ui.cbProtoView.currentIndex()
 
-        message = self.proto_analyzer.messages[endRow]
-        startCol = message.convert_index(startCol, old_view, new_view, True)[0]
-        endCol = message.convert_index(endCol, old_view, new_view, True)[1]
-
-        endCol = endCol if endCol < len(self.protocol_model.display_data[endRow]) else len(
-            self.protocol_model.display_data[endRow]) - 1
+        group = self.get_group_for_row(startRow)
+        startCol = group.convert_index(startCol, old_view, new_view, True)[0]
+        endCol = group.convert_index(endCol, old_view, new_view, True)[1]
 
         startindex = self.protocol_model.index(startRow, startCol)
         endindex = self.protocol_model.index(endRow, endCol)
@@ -607,54 +519,379 @@ class CompareFrameController(QWidget):
         self.ui.tblViewProtocol.selectionModel().select(sel, QItemSelectionModel.ClearAndSelect)
         self.ui.tblViewProtocol.scrollTo(mid_index)
 
+
+    def get_group_for_row(self, row: int):
+        offset = 0
+        for group in self.groups:
+            if row in range(offset, offset + group.num_blocks):
+                return group
+            offset += group.num_blocks
+
+        return None
+
+    @pyqtSlot()
+    def handle_table_selection_changed(self):
+        self.selection_timer.start(100)
+
+    @pyqtSlot()
+    def on_cbDecoding_currentIndexChanged(self):
+        new_index = self.ui.cbDecoding.currentIndex()
+        if new_index == -1:
+            return
+
+        if new_index == self.ui.cbDecoding.count() - 1:
+            self.set_decoding(None)
+        else:
+            self.set_decoding(self.decodings[new_index], for_all_blocks=False)
+
+    def set_decoding(self, decoding: encoding, for_all_blocks=True):
+        if decoding is None:
+            self.show_decoding_clicked.emit()
+        else:
+            self.show_all_cols()
+
+            if for_all_blocks:
+                for group in self.groups:
+                    group.decoding = decoding
+
+            else:
+                for i in self.active_group_ids:
+                    self.groups[i].decoding = decoding
+
+            self.clear_search()
+
+            selected = self.ui.tblViewProtocol.selectionModel().selection()
+
+            if not selected.isEmpty() and self.isVisible() and self.proto_analyzer.num_blocks > 0:
+                max_row = numpy.max([rng.bottom() for rng in selected])
+                max_row = max_row if max_row < len(self.proto_analyzer.blocks) else -1
+                try:
+                    block = self.proto_analyzer.blocks[max_row]
+                except IndexError:
+                    block = None
+                self.__set_decoding_error_label(block)
+            else:
+                self.__set_decoding_error_label(None)
+
+            self.protocol_model.update()
+            self.protocol_label_list_model.update()
+            self.label_value_model.update()
+
+            for group in self.groups:
+                for lbl in group.labels:
+                    self.set_protocol_label_visibility(lbl, group)
+
+            self.ui.tblViewProtocol.resize_it()
+
+
+    def __set_decoding_error_label(self, block: ProtocolBlock):
+        if block:
+            errors = block.decoding_errors
+            percent = 100 * (errors / len(block))
+            if percent <= 100:
+                self.ui.lDecodingErrorsValue.setText(
+                    locale.format_string("%d (%.02f%%)", (errors, 100 * (errors / len(block)))))
+            else:
+                self.ui.lDecodingErrorsValue.setText(locale.format_string("%d", (errors)))
+        else:
+            self.ui.lDecodingErrorsValue.setText("")
+
+    @pyqtSlot()
+    def on_table_selection_timer_timeout(self):
+        selected = self.ui.tblViewProtocol.selectionModel().selection()
+        """:type: QtWidgets.QItemSelection """
+
+        if selected.isEmpty():
+            self.ui.lBitsSelection.setText("")
+            self.ui.lDecimalSelection.setText("")
+            self.ui.lHexSelection.setText("")
+            self.ui.lNumSelectedColumns.setText("0")
+            self.ui.lblLabelValues.setText(self.tr("Label values for block "))
+            self.label_value_model.block_index = -1
+            return -1, -1
+
+        min_row = numpy.min([rng.top() for rng in selected])
+        max_row = numpy.max([rng.bottom() for rng in selected])
+        start = numpy.min([rng.left() for rng in selected])
+        end = numpy.max([rng.right() for rng in selected]) + 1
+
+        self.protocol_label_list_model.selected_labels = self.get_labels_from_selection(min_row, max_row,
+                                                                                        start, end - 1)
+
+        cur_view = self.ui.cbProtoView.currentIndex()
+        self.ui.lNumSelectedColumns.setText(str(end - start))
+
+        if cur_view == 1:
+            start *= 4
+            end *= 4
+        elif cur_view == 2:
+            start *= 8
+            end *= 8
+
+        bits = self.proto_analyzer.decoded_proto_bits_str[max_row][start:end]
+        sym_ind = [i for i, b in enumerate(bits) if b not in ("0", "1")]
+        hex_bits = []
+        pos = 0
+        decimals = []
+        for si in sym_ind:
+            hb = bits[pos:si]
+            hex_bits.append("".join("{0:x}".format(int(hb[i:i + 4], 2)) for i in range(0, len(hb), 4)))
+            hex_bits.append(bits[si])
+
+            if len(hb) > 0:
+                decimals.append(str(int(hb, 2)))
+            decimals.append(bits[si])
+
+            pos = si + 1
+        hex_bits.append("".join("{0:x}".format(int(bits[pos:][i:i + 4], 2)) for i in range(0, len(bits[pos:]), 4)))
+        if len(bits[pos:]) > 0:
+            decimals.append(str(int(bits[pos:], 2)))
+
+        # hexs = "".join(["{0:x}".format(int(bits[i:i + 4], 2)) for i in range(0, len(bits), 4)])
+        hexs = "".join(hex_bits)
+        block = self.proto_analyzer.blocks[max_row]
+
+        self.ui.lBitsSelection.setText(bits)
+        self.ui.lHexSelection.setText(hexs)
+        self.__set_decoding_error_label(block)
+        if len(decimals) > 0:
+            self.ui.lDecimalSelection.setText("".join(decimals))
+        else:
+            self.ui.lDecimalSelection.setText("")
+
+        self.ui.lblLabelValues.setText(self.tr("Label values for block #") + str(min_row + 1))
+        if min_row != self.label_value_model.block_index:
+            self.label_value_model.block_index = min_row
+
+        active_group_ids = set()
+        selection = QItemSelection()
+
+        for group, tree_items in self.proto_tree_model.protocol_tree_items.items():
+            for i, tree_item in enumerate(tree_items):
+                proto = tree_item.protocol
+                if proto.show and any(i in self.rows_for_protocols[proto] for i in range(min_row, max_row + 1)):
+                    #index = self.proto_tree_model.createIndex(i, 0, tree_item)
+                    #selection.select(index, index)
+                    active_group_ids.add(group)
+
+        if active_group_ids == set(self.active_group_ids):
+            ignore_table_model_on_update = True
+        else:
+            ignore_table_model_on_update = False
+            self.active_group_ids = list(active_group_ids)
+            self.active_group_ids.sort()
+
+        block = self.proto_analyzer.blocks[min_row]
+        self.ui.lblRSSI.setText(locale.format_string("%.2f", block.rssi))
+        abs_time = Formatter.science_time(block.absolute_time)
+        rel_time = Formatter.science_time(block.relative_time)
+        self.ui.lTime.setText("{0} (+{1})".format(abs_time, rel_time))
+
+        # Set Decoding Combobox
+        self.ui.cbDecoding.blockSignals(True)
+        group = self.get_group_for_row(min_row)
+        if group:
+            self.ui.cbDecoding.setCurrentText(group.decoding.name)
+        self.ui.cbDecoding.blockSignals(False)
+
+        self.ui.treeViewProtocols.blockSignals(True)
+        self.ui.treeViewProtocols.selectionModel().select(selection, QItemSelectionModel.ClearAndSelect)
+        self.ui.treeViewProtocols.blockSignals(False)
+
+        self.updateUI(ignore_table_model=ignore_table_model_on_update, resize_table=False)
+
+    @pyqtSlot(int)
+    def handle_ref_index_changed(self, new_ref_index):
+        if new_ref_index == -1:
+            self.proto_tree_model.reference_protocol = -1
+        else:
+            i = 0
+            visible_protos = [proto for proto in self.protocol_list if proto.show]
+            for proto in visible_protos:
+                i += proto.num_blocks
+                if i > new_ref_index:
+                    self.proto_tree_model.reference_protocol = proto
+                    return
+            self.proto_tree_model.reference_protocol = -1
+
+    def contextMenuEvent(self, event: QContextMenuEvent):
+        pass
+
+    @pyqtSlot()
+    def handle_item_in_proto_tree_dropped(self):
+        self.__protocols = None
+        self.set_shown_protocols()
+        self.ui.treeViewProtocols.clearSelection()
+
+    def add_labels_to_group(self, label_ids, group_id: int):
+        labels = [self.protocol_label_list_model.proto_labels[i] for i in label_ids]
+        group = self.groups[group_id]
+        for label in labels:
+            ol = group.find_overlapping_labels(label.start, label.end, 0)
+            if len(ol) > 0:
+                reply = QMessageBox.question(self, self.tr("Overlapping Label"),
+                                             self.tr(
+                                                 "Adding label {0} to group {1} would overlap with existing label(s) {2}.\n\n"
+                                                 "Do you want to split the existing labels in order to add {0}?\n"
+                                                 "If you choose 'no' the label will not be added to group.\n\n"
+                                                 "Note, only partial overlapped labels will be splitted."
+                                                 "Fully overlapped labels will be removed.".
+                                                 format(label.name, group.name,
+                                                        ",".join([lbl.name for lbl in ol]))),
+                                             QMessageBox.Yes | QMessageBox.No)
+
+                if reply == QMessageBox.Yes:
+                    group.split_for_new_label(label)
+                    group.add_protocol_label(label.start, label.end-1, label.refblock, 0,
+                                             label.restrictive, label.name, color_ind=label.color_index)
+                else:
+                    continue
+            else:
+                if group.num_protocols > 0:
+                    group.add_protocol_label(label.start, label.end-1, label.refblock, 0,
+                             label.restrictive, label.name, color_ind=label.color_index)
+                else:
+                    Errors.empty_group()
+
+
+        self.refresh()
+
+    @pyqtSlot()
+    def handle_tree_view_selection_changed(self):
+        indexes = self.ui.treeViewProtocols.selectedIndexes()
+
+        selected_items = [self.proto_tree_model.getItem(index) for index in indexes]
+
+        self.ui.tblViewProtocol.blockSignals(True)
+        active_group_ids = set()
+        sel = QItemSelection()
+
+        col_count = self.protocol_model.col_count
+        for item in selected_items:
+            if item.is_group:
+                active_group_ids.add(self.proto_tree_model.rootItem.index_of(item))
+            elif item.show:
+                active_group_ids.add(self.proto_tree_model.rootItem.index_of(item.parent()))
+
+                # rows_for_proto = self.rows_for_protocols[item.protocol]
+                # if len(rows_for_proto) > 0:
+                #     startindex = self.protocol_model.index(rows_for_proto[0], 0)
+                #     endindex = self.protocol_model.index(rows_for_proto[-1], col_count - 1)
+                #     sel.select(startindex, endindex)
+
+        if len(active_group_ids) == 0:
+            active_group_ids.add(0)
+            show_decoding = False
+        else:
+            show_decoding = True
+
+        if active_group_ids == set(self.active_group_ids):
+            ignore_table_model_on_update = True
+        else:
+            ignore_table_model_on_update = False
+            self.active_group_ids = list(active_group_ids)
+            self.active_group_ids.sort()
+
+        if show_decoding:
+            self.ui.cbDecoding.blockSignals(True)
+            self.ui.cbDecoding.setCurrentText(self.groups[self.active_group_ids[0]].decoding.name)
+            self.ui.cbDecoding.blockSignals(False)
+
+        self.ui.tblViewProtocol.selectionModel().select(sel, QItemSelectionModel.ClearAndSelect)
+        self.ui.tblViewProtocol.blockSignals(False)
+
+        self.updateUI(ignore_table_model=ignore_table_model_on_update)
+
+    @pyqtSlot(int)
+    def handle_group_added(self, index):
+        self.ui.treeViewProtocols.edit(index)
+
+    def handle_group_deleted(self, deleted_group_id, new_group_id_of_childs):
+        try:
+            self.active_group_ids.remove(deleted_group_id)
+        except:
+            pass
+
+        self.updateUI()
+
     def expand_group_node(self, group_id):
-        index = self.proto_tree_model.createIndex(group_id, 0, self.proto_tree_model.rootItem.child(group_id))
-        self.ui.treeViewProtocols.expand(index)
+        self.ui.treeViewProtocols.expand(
+            self.proto_tree_model.createIndex(group_id, 0, self.proto_tree_model.rootItem.child(group_id)))
 
     def updateUI(self, ignore_table_model=False, resize_table=True):
         if not ignore_table_model:
             self.protocol_model.update()
 
         self.protocol_label_list_model.update()
-        self.proto_tree_model.layoutChanged.emit()  # do not call update, as it prevents editing
+        self.proto_tree_model.layoutChanged.emit()
         self.label_value_model.update()
         self.protocol_label_list_model.update()
 
         if resize_table:
-            self.ui.tblViewProtocol.resize_columns()
+            self.ui.tblViewProtocol.resize_it()
 
     def refresh(self):
         self.__protocols = None
         self.set_shown_protocols()
+        self.updateUI()
 
     def reset(self):
-        for message_type in self.proto_analyzer.message_types:
-            message_type.clear()
         self.proto_tree_model.rootItem.clearChilds()
         self.proto_tree_model.rootItem.addGroup()
+        for group in self.groups:
+            group.labels[:] = []
+        for block in self.proto_analyzer.blocks:
+            block.exclude_from_decoding_labels[:] = []
         self.refresh()
 
-    def create_protocol_label_dialog(self, preselected_index: int):
+    def refresh_protocol_labels(self):
+        for group in self.groups:
+            group.refresh_labels()
+
+    @pyqtSlot(int)
+    def on_undo_stack_index_changed(self, index: int):
+        self.refresh_protocol_labels()
+        self.protocol_model.update()
+        self.protocol_label_list_model.update()
+
+    @pyqtSlot(ProtocolLabel)
+    def on_edit_label_clicked_in_table(self, proto_label: ProtocolLabel):
+        group = self.get_group_for_label(proto_label)
+        self.show_protocol_labels(group.labels.index(proto_label))
+
+    @pyqtSlot(int)
+    def show_protocol_labels(self, preselected_index: int):
         view_type = self.ui.cbProtoView.currentIndex()
-        try:
-            longest_message = max(
-                (msg for msg in self.proto_analyzer.messages if msg.message_type == self.active_message_type), key=len)
-        except ValueError:
-            logger.warning("Configuring message type with empty message set.")
-            longest_message = Message([True] * 1000, 1000, self.active_message_type)
-        protocol_label_dialog = ProtocolLabelDialog(preselected_index=preselected_index,
-                                                    message=longest_message, viewtype=view_type, parent=self)
-        protocol_label_dialog.apply_decoding_changed.connect(self.on_apply_decoding_changed)
-        protocol_label_dialog.finished.connect(self.on_protocol_label_dialog_finished)
+        active_group = self.active_groups[0] if self.active_groups else self.groups[0]
+        offset = sum(self.groups[i].num_blocks for i in range(0, self.groups.index(active_group)))
+        label_controller = ProtocolLabelController(preselected_index, active_group, offset,
+                                                   viewtype=view_type,
+                                                   parent=self)
+        label_controller.exec_()
 
-        return protocol_label_dialog
+        self.protocol_label_list_model.update()
+        self.label_value_model.update()
+        self.show_all_cols()
+        for group in self.groups:
+            for lbl in group.labels:
+                self.set_protocol_label_visibility(lbl, group)
+        self.handle_show_only_checkbox_changed()
+        self.protocol_model.update()
+        self.ui.tblViewProtocol.resize_it()
 
-    def show_protocol_label_dialog(self, preselected_index: int):
-        dialog = self.create_protocol_label_dialog(preselected_index)
-        dialog.exec_()
-
+    @pyqtSlot()
     def search(self):
         value = self.ui.lineEditSearch.text()
+        if self.ui.cbSearchType.currentIndex() == 1:
+            view = self.ui.cbProtoView.currentIndex()
+            if view == 0:
+                value = "{0:b}".format(int(value))
+            elif view == 1:
+                value = "{0:x}".format(int(value))
+            elif view == 2:
+                self.ui.lineEditSearch.setText("Number not supported with ASCII.")
+                return
+
         nresults = self.protocol_model.find_protocol_value(value)
 
         if nresults > 0:
@@ -683,35 +920,7 @@ class CompareFrameController(QWidget):
 
         self.ui.tblViewProtocol.setFocus()
 
-    def filter_search_results(self):
-        if "Filter" not in self.ui.btnSearchSelectFilter.text():
-            # Checking for equality is not enough as some desktop environments (I am watching at you KDE!)
-            # insert a & at beginning of the string
-            return
-
-        self.setCursor(Qt.WaitCursor)
-        if self.ui.lineEditSearch.text():
-            self.search()
-            self.ui.tblLabelValues.clearSelection()
-
-            matching_rows = set(search_result[0] for search_result in self.protocol_model.search_results)
-            rows_to_hide = set(range(0, self.protocol_model.row_count)) - matching_rows
-            self.ui.tblViewProtocol.hide_row(rows_to_hide)
-        else:
-            self.show_all_rows()
-            self.set_shown_protocols()
-
-        self.unsetCursor()
-
-    def __set_shown_rows_status_label(self):
-        if len(self.protocol_model.hidden_rows) > 0:
-            rc = self.protocol_model.row_count
-            text = self.tr("shown: {}/{} (<a href='reset_filter'>reset</a>)")
-            self.ui.lblShownRows.setText(text.format(rc - len(self.protocol_model.hidden_rows), rc))
-            self.ui.lblShownRows.show()
-        else:
-            self.ui.lblShownRows.hide()
-
+    @pyqtSlot()
     def next_search_result(self):
         index = int(self.ui.lSearchCurrent.text())
         self.ui.lSearchTotal.setText((str(len(self.protocol_model.search_results))))
@@ -737,6 +946,7 @@ class CompareFrameController(QWidget):
             if index > 0 and len(self.protocol_model.search_results) > 0:
                 self.ui.btnPrevSearch.setEnabled(True)
 
+    @pyqtSlot()
     def prev_search_result(self):
         index = int(self.ui.lSearchCurrent.text()) - 2
 
@@ -763,6 +973,7 @@ class CompareFrameController(QWidget):
                 self.ui.btnNextSearch.setEnabled(True)
 
     def clear_search(self):
+        self.ui.lineEditSearch.clear()
         self.ui.btnPrevSearch.setEnabled(False)
         self.ui.btnNextSearch.setEnabled(False)
         self.ui.lSearchTotal.setText("-")
@@ -770,30 +981,28 @@ class CompareFrameController(QWidget):
         self.protocol_model.search_results[:] = []
         self.protocol_model.search_value = ""
 
-    def set_protocol_label_visibility(self, lbl: ProtocolLabel, message: Message = None):
-        try:
-            message = message if message else next(
-                msg for msg in self.proto_analyzer.messages if lbl in msg.message_type)
-            start, end = message.get_label_range(lbl, self.ui.cbProtoView.currentIndex(), True)
+    def set_protocol_label_visibility(self, lbl: ProtocolLabel, group: ProtocolGroup = None):
+        group = self.get_group_for_label(lbl) if not group else group
+        start, end = group.get_label_range(lbl, self.ui.cbProtoView.currentIndex(), True)
 
-            for i in range(start, end):
-                self.ui.tblViewProtocol.setColumnHidden(i, not lbl.show)
-        except Exception as e:
-            pass
+        for i in range(start, end):
+            self.ui.tblViewProtocol.setColumnHidden(i, not lbl.show)
 
-    def show_all_rows(self):
-        self.ui.lblShownRows.hide()
-        for i in range(0, self.protocol_model.row_count):
-            self.ui.tblViewProtocol.showRow(i)
-        self.set_shown_protocols()
+    def get_group_for_label(self, lbl: ProtocolLabel) -> ProtocolGroup:
+        for group in self.groups:
+            if lbl in group.labels:
+                return group
+        return None
 
     def show_all_cols(self):
         for i in range(self.protocol_model.col_count):
             self.ui.tblViewProtocol.showColumn(i)
 
     def save_protocol(self):
-        for msg in self.proto_analyzer.messages:
-            if not msg.decoder.is_nrz:
+        viewtype = self.ui.cbProtoView.currentIndex()
+
+        for group in self.groups:
+            if not group.decoding.is_nrz:
                 reply = QMessageBox.question(self, "Saving of protocol",
                                              "You want to save this protocol with an encoding different from NRZ.\n"
                                              "This may cause loss of information if you load it again.\n\n"
@@ -804,32 +1013,50 @@ class CompareFrameController(QWidget):
                     break
 
         text = "protocol"
-        filename = FileOperator.get_save_file_name("{0}.proto.xml".format(text), caption="Save protocol")
+        filename = FileOperator.get_save_file_name("{0}.txt".format(text), parent=self, caption="Save protocol")
 
         if not filename:
             return
 
-        self.proto_analyzer.to_xml_file(filename=filename, decoders=self.decodings,
-                                        participants=self.project_manager.participants, write_bits=True)
 
-    def show_differences(self, show_differences: bool):
-        if show_differences:
-            if self.protocol_model.refindex == -1:
-                self.protocol_model.refindex = 0
-        else:
-            self.ui.chkBoxShowOnlyDiffs.setChecked(False)
-            self.protocol_model.refindex = -1
+        FileOperator.save_protocol(filename, viewtype, self.groups, list(map(str, self.decodings)),
+                                   self.proto_analyzer.used_symbols)
 
-    def set_show_only_status(self):
-        """
-        Handles the different combinations of the show only checkboxes, namely:
-         - Show only labels
-         - Show only Diffs
-        """
-        if self.ui.chkBoxShowOnlyDiffs.isChecked() and not self.ui.cbShowDiffs.isChecked():
-            self.ui.cbShowDiffs.setChecked(True)
-            self.show_differences(True)
+    def handle_writeable_changed(self, writeable_status: bool):
+        self.protocol_model.is_writeable = writeable_status
+        self.proto_tree_model.set_copy_mode(writeable_status)
+        self.refresh()
 
+    def handle_label_removed(self, plabel: ProtocolLabel):
+        if not plabel.show:
+            self.show_all_cols()
+            for group in self.groups:
+                for lbl in group.labels:
+                    self.set_protocol_label_visibility(lbl, group)
+
+            self.ui.tblViewProtocol.resize_it()
+
+        self.protocol_model.update()
+        self.protocol_label_list_model.update()
+
+    def handle_label_selection_changed(self):
+        rows = [index.row() for index in self.ui.listViewLabelNames.selectedIndexes()]
+        if len(rows) == 0:
+            return
+
+        maxrow = numpy.max(rows)
+
+        label = self.protocol_label_list_model.proto_labels[maxrow]
+        if not label.show:
+            return
+
+        group = self.get_group_for_label(label)
+        start, end = group.get_label_range(label, self.protocol_model.proto_view, True)
+        indx = self.protocol_model.index(0, int((start + end) / 2))
+
+        self.ui.tblViewProtocol.scrollTo(indx)
+
+    def handle_show_only_checkbox_changed(self):
         if self.ui.chkBoxOnlyShowLabelsInProtocol.isChecked() and self.ui.chkBoxShowOnlyDiffs.isChecked():
             self.show_only_diffs_and_labels()
         elif self.ui.chkBoxOnlyShowLabelsInProtocol.isChecked() and not self.ui.chkBoxShowOnlyDiffs.isChecked():
@@ -839,15 +1066,15 @@ class CompareFrameController(QWidget):
         else:
             self.restore_visibility()
 
-        self.ui.tblViewProtocol.resize_columns()
+        self.ui.tblViewProtocol.resize_it()
 
     def show_only_labels(self):
         visible_columns = set()
-        for msg in self.proto_analyzer.messages:
-            for lbl in msg.message_type:
+        for group in self.groups:
+            for lbl in group.labels:
                 if lbl.show:
-                    start, end = msg.get_label_range(lbl=lbl, view=self.ui.cbProtoView.currentIndex(),
-                                                     decode=True)
+                    start, end = group.get_label_range(lbl, self.ui.cbProtoView.currentIndex(),
+                                                       True)
                     visible_columns |= (set(range(start, end)))
 
         for i in range(self.protocol_model.col_count):
@@ -857,6 +1084,9 @@ class CompareFrameController(QWidget):
                 self.ui.tblViewProtocol.hideColumn(i)
 
     def show_only_diffs(self):
+        if not self.ui.cbShowDiffs.isChecked():
+            self.ui.cbShowDiffs.setChecked(True)
+
         visible_rows = [i for i in range(self.protocol_model.row_count) if not self.ui.tblViewProtocol.isRowHidden(i)
                         and i != self.protocol_model.refindex]
 
@@ -870,11 +1100,12 @@ class CompareFrameController(QWidget):
 
     def show_only_diffs_and_labels(self):
         visible_label_columns = set()
-        for lbl in self.proto_analyzer.protocol_labels:
-            if lbl.show:
-                start, end = self.proto_analyzer.messages[0].get_label_range(lbl, self.ui.cbProtoView.currentIndex(),
-                                                                             True)
-                visible_label_columns |= (set(range(start, end)))
+        for group in self.groups:
+            for lbl in group.labels:
+                if lbl.show:
+                    start, end = group.get_label_range(lbl, self.ui.cbProtoView.currentIndex(),
+                                                       True)
+                    visible_label_columns |= (set(range(start, end)))
 
         visible_rows = [i for i in range(self.protocol_model.row_count) if not self.ui.tblViewProtocol.isRowHidden(i)
                         and i != self.protocol_model.refindex]
@@ -895,13 +1126,106 @@ class CompareFrameController(QWidget):
         for i in range(self.protocol_model.col_count):
             self.ui.tblViewProtocol.showColumn(i)
 
-        for lbl in self.proto_analyzer.protocol_labels:
-            self.set_protocol_label_visibility(lbl)
+        for group in self.groups:
+            for lbl in group.labels:
+                self.set_protocol_label_visibility(lbl, group)
 
         if not selected.isEmpty():
             min_row = numpy.min([rng.top() for rng in selected])
             start = numpy.min([rng.left() for rng in selected])
             self.ui.tblViewProtocol.scrollTo(self.protocol_model.index(min_row, start))
+
+    def add_protocol_label(self, start: int, end: int, blocknr: int,
+                           proto_view: int, restrictive: bool, edit_label_name=True):
+        # Ensure atleast one Group is active
+        active_group_id = self.active_group_ids[0] if self.active_group_ids else 0
+        group = self.proto_tree_model.group_at(active_group_id)
+
+        overlapping_labels = group.find_overlapping_labels(start, end, proto_view)
+        if len(overlapping_labels) > 0:
+            reply = QMessageBox.question(self, self.tr("Overlapping Label"),
+                                         self.tr("This label would overlap with existing label(s) {0}.\n\n"
+                                                 "Do you want to split the existing labels in order to create the new one?\n"
+                                                 "If you choose 'no' label creation will be cancelled.\n\n"
+                                                 "Note, only partial overlapped labels will be splitted."
+                                                 "Fully overlapped labels will be removed.".
+                                                 format(",".join([lbl.name for lbl in overlapping_labels]))),
+                                         QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                group.split_labels(start, end, proto_view)
+            else:
+                return False
+
+        offset = sum(self.groups[i].num_blocks for i in range(0, active_group_id))
+        proto_label = group.add_protocol_label(start, end, blocknr-offset, proto_view, restrictive)
+
+        self.protocol_label_list_model.update()
+        self.protocol_model.update()
+
+        if edit_label_name:
+            try:
+                index = self.protocol_label_list_model.proto_labels.index(proto_label)
+                self.ui.listViewLabelNames.edit(self.protocol_label_list_model.createIndex(index, 0))
+            except ValueError:
+                pass
+
+        self.label_value_model.update()
+
+        return True
+
+    @pyqtSlot()
+    def on_btn_analyze_clicked(self):
+        available_analyze_plugins = self.plugin_manager.label_assign_plugins
+        if len(available_analyze_plugins) == 0:
+            QMessageBox.critical(self, self.tr("No analyze plugins available"),
+                                 self.tr("Could not find any plugins for protocol analysis."))
+            return
+
+        active_analyze_plugins = [p for p in available_analyze_plugins if p.enabled]
+        if len(active_analyze_plugins) == 0:
+            installed_plugins = self.plugin_manager.installed_plugins
+            options_controller = OptionsController(installed_plugins, highlighted_plugins=available_analyze_plugins)
+            options_controller.exec_()
+            return
+
+        self.setCursor(Qt.WaitCursor)
+        self.protocol_model.undo_stack.blockSignals(True)
+        for p in active_analyze_plugins:
+            self.protocol_model.undo_stack.push(p.get_action(self.groups))
+        self.protocol_model.undo_stack.blockSignals(False)
+        self.protocol_model.update()
+        self.protocol_label_list_model.update()
+        self.unsetCursor()
+
+    def show_proto_sniff_dialog(self):
+        pm = self.project_manager
+        signal = None
+        for proto in self.protocol_list:
+            signal = proto.signal
+            if signal:
+                break
+
+        if signal:
+            bit_len = signal.bit_len
+            mod_type = signal.modulation_type
+            tolerance = signal.tolerance
+            noise = signal.noise_treshold
+            center = signal.qad_center
+        else:
+            bit_len = 100
+            mod_type = 1
+            tolerance = 5
+            noise = 0.001
+            center = 0.02
+
+        psd = ProtocolSniffDialogController(pm.frequency, pm.sample_rate,
+                                            pm.bandwidth, pm.gain,
+                                            pm.device, noise, center,
+                                            bit_len, tolerance, mod_type,
+                                            parent=self)
+        psd.protocol_accepted.connect(self.add_sniffed_protocol_blocks)
+        psd.show()
+
 
     def get_labels_from_selection(self, row_start: int, row_end: int, col_start: int, col_end: int):
         """
@@ -912,521 +1236,15 @@ class CompareFrameController(QWidget):
         col_end += 1
 
         view = self.ui.cbProtoView.currentIndex()
+        offset = 0
         result = []
-        for i in range(row_start, row_end):
-            message = self.proto_analyzer.messages[i]
-            for label in message.message_type:
-                lbl_start, lbl_end = message.get_label_range(lbl=label, view=view, decode=True)
-                if any(j in range(lbl_start, lbl_end) for j in range(col_start, col_end)) and not label in result:
-                    result.append(label)
+        for group in self.groups:
+            for lbl in group.labels:
+                lbl_start, lbl_end = group.get_label_range(lbl, view, True)
+                if any(i-offset in lbl.block_numbers for i in range(row_start, row_end)) and\
+                    any(j in range(lbl_start, lbl_end) for j in range(col_start, col_end)):
+                    result.append(lbl)
+
+            offset += group.num_blocks
 
         return result
-
-    def set_search_ui_visibility(self, visible: bool):
-        self.ui.btnPrevSearch.setVisible(visible)
-        self.ui.lSearchCurrent.setVisible(visible)
-        self.ui.lSlash.setVisible(visible)
-        self.ui.lSearchTotal.setVisible(visible)
-        self.ui.btnNextSearch.setVisible(visible)
-
-    def __set_default_message_type_ui_status(self):
-        if self.active_message_type == self.proto_analyzer.default_message_type:
-            self.ui.cbMessagetypes.setEditable(False)
-            self.ui.btnRemoveMessagetype.hide()
-            self.ui.btnMessagetypeSettings.hide()
-        else:
-            self.ui.cbMessagetypes.setEditable(True)
-            self.ui.btnRemoveMessagetype.show()
-            self.ui.btnMessagetypeSettings.show()
-
-    def update_automatic_assigned_message_types(self):
-        self.proto_analyzer.update_auto_message_types()
-        self.protocol_model.update()
-
-    def refresh_assigned_participants_ui(self):
-        self.protocol_model.refresh_vertical_header()
-        self.ui.tblViewProtocol.resize_vertical_header()
-        self.participant_changed.emit()
-
-    def refresh_field_types_for_labels(self):
-        for mt in self.proto_analyzer.message_types:
-            for lbl in (lbl for lbl in mt if lbl.field_type is not None):  # type: ProtocolLabel
-                mt.change_field_type_of_label(lbl, self.field_types_by_caption.get(lbl.field_type.caption, None))
-
-        self.update_field_type_combobox()
-
-    def mousePressEvent(self, event):
-        return
-
-    def contextMenuEvent(self, event: QContextMenuEvent):
-        pass
-
-    @pyqtSlot(int)
-    def on_protocol_label_dialog_finished(self, dialog_result: int):
-        self.protocol_label_list_model.update()
-        self.update_field_type_combobox()
-        self.label_value_model.update()
-        self.show_all_cols()
-        for lbl in self.proto_analyzer.protocol_labels:
-            self.set_protocol_label_visibility(lbl)
-        self.set_show_only_status()
-        self.protocol_model.update()
-        self.ui.tblViewProtocol.resize_columns()
-
-    @pyqtSlot()
-    def on_btn_analyze_clicked(self):
-        self.setCursor(Qt.WaitCursor)
-        self.ui.stackedWidgetLogicAnalysis.setCurrentIndex(1)
-
-        self.ui.progressBarLogicAnalyzer.setFormat("%p% (Detecting participants)")
-        self.ui.progressBarLogicAnalyzer.setValue(0)
-
-        if self.assign_participants_action.isChecked():
-            t = time.time()
-            for protocol in self.protocol_list:
-                protocol.auto_assign_participants(self.protocol_model.participants)
-            self.refresh_assigned_participants_ui()
-            logger.debug("Time for auto assigning participants: " + str(time.time() - t))
-
-        self.ui.progressBarLogicAnalyzer.setFormat("%p% (Assign message type by rules)")
-        self.ui.progressBarLogicAnalyzer.setValue(50)
-
-        if self.assign_message_type_action.isChecked():
-            t = time.time()
-            self.update_automatic_assigned_message_types()
-            logger.debug("Time for auto assigning message types: " + str(time.time() - t))
-
-        self.ui.progressBarLogicAnalyzer.setFormat("%p% (Find new labels/message types)")
-        self.ui.progressBarLogicAnalyzer.setValue(75)
-
-        if self.assign_labels_action.isChecked():
-            t = time.time()
-            self.proto_analyzer.auto_assign_labels()
-            self.protocol_model.update()
-            self.label_value_model.update()
-            self.protocol_label_list_model.update()
-            self.ui.listViewLabelNames.clearSelection()
-            logger.debug("Time for auto assigning labels: " + str(time.time() - t))
-
-        self.ui.progressBarLogicAnalyzer.setValue(100)
-        self.unsetCursor()
-        self.ui.stackedWidgetLogicAnalysis.setCurrentIndex(0)
-
-        self.fill_message_type_combobox()  # in case message types were added by logic analyzer
-
-    @pyqtSlot()
-    def on_btn_save_protocol_clicked(self):
-        self.save_protocol()
-
-    @pyqtSlot()
-    def on_btn_load_proto_clicked(self):
-        self.load_protocol_clicked.emit()
-
-    @pyqtSlot()
-    def on_btn_next_search_clicked(self):
-        self.next_search_result()
-
-    @pyqtSlot()
-    def on_btn_prev_search_clicked(self):
-        self.prev_search_result()
-
-    @pyqtSlot()
-    def on_btn_search_clicked(self):
-        self.search()
-
-    @pyqtSlot()
-    def on_btn_remove_message_type_clicked(self):
-        for msg in self.proto_analyzer.messages:
-            if msg.message_type == self.active_message_type:
-                msg.message_type = self.proto_analyzer.default_message_type
-        self.proto_analyzer.message_types.remove(self.active_message_type)
-        self.fill_message_type_combobox()
-        self.protocol_model.update()
-        self.active_message_type = self.proto_analyzer.default_message_type
-
-    @pyqtSlot()
-    def on_btn_message_type_settings_clicked(self):
-        dialog = MessageTypeDialog(self.active_message_type, parent=self)
-        dialog.show()
-        dialog.finished.connect(self.on_message_type_dialog_finished)
-
-    @pyqtSlot()
-    def on_btn_new_message_type_clicked(self):
-        self.add_message_type()
-
-    @pyqtSlot(list)
-    def on_table_new_message_type_clicked(self, selected_messages: list):
-        self.add_message_type(selected_messages)
-
-    @pyqtSlot()
-    def on_table_selection_changed(self):
-        self.selection_timer.start(0)
-
-    @pyqtSlot()
-    def on_combobox_decoding_current_index_changed(self):
-        new_index = self.ui.cbDecoding.currentIndex()
-        if new_index == -1:
-            return
-
-        if new_index == self.ui.cbDecoding.count() - 1:
-            self.set_decoding(None)
-        else:
-            self.set_decoding(self.decodings[new_index],
-                              messages=self.selected_messages if self.selected_messages else None)
-
-    @pyqtSlot()
-    def on_participant_show_state_changed(self):
-        for i, msg in enumerate(self.proto_analyzer.messages):
-            hide = not msg.participant.show if msg.participant is not None else not self.participant_list_model.show_unassigned
-            self.ui.tblViewProtocol.setRowHidden(i, hide)
-
-        self.set_shown_protocols()
-
-    @pyqtSlot(int, int)
-    def on_group_deleted(self, deleted_group_id: int, new_group_id_of_childs: int):
-        try:
-            self.active_group_ids.remove(deleted_group_id)
-        except:
-            pass
-
-        self.updateUI()
-
-    @pyqtSlot()
-    def on_tbl_view_protocol_row_visibility_changed(self):
-        self.__set_shown_rows_status_label()
-        self.set_shown_protocols()
-        self.set_show_only_status()
-
-    @pyqtSlot(int)
-    def on_check_box_show_only_labels_state_changed(self, new_state: int):
-        self.set_show_only_status()
-
-    @pyqtSlot(int)
-    def on_check_box_show_only_diffs_state_changed(self, new_state: int):
-        self.set_show_only_status()
-
-    @pyqtSlot(int)
-    def on_proto_to_group_added(self, group_id: int):
-        self.expand_group_node(group_id)
-
-    @pyqtSlot(ProtocolLabel)
-    def on_protolabel_visibility_changed(self, proto_label: ProtocolLabel):
-        self.set_protocol_label_visibility(proto_label)
-        self.label_value_model.update()
-
-    @pyqtSlot(list)
-    def on_files_dropped(self, files: list):
-        self.files_dropped.emit(files)
-
-    @pyqtSlot(bool)
-    def on_chkbox_show_differences_clicked(self, checked: bool):
-        self.show_differences(checked)
-
-    @pyqtSlot()
-    def on_search_action_triggered(self):
-        self.ui.btnSearchSelectFilter.setText("Search")
-        self.ui.btnSearchSelectFilter.setIcon(QIcon.fromTheme("edit-find"))
-        self.set_search_ui_visibility(True)
-        self.ui.btnSearchSelectFilter.clicked.disconnect()
-        self.ui.btnSearchSelectFilter.clicked.connect(self.on_btn_search_clicked)
-
-    @pyqtSlot()
-    def on_select_action_triggered(self):
-        self.ui.btnSearchSelectFilter.setText("Select all")
-        self.ui.btnSearchSelectFilter.setIcon(QIcon.fromTheme("edit-select-all"))
-        self.set_search_ui_visibility(False)
-        self.ui.btnSearchSelectFilter.clicked.disconnect()
-        self.ui.btnSearchSelectFilter.clicked.connect(self.select_all_search_results)
-
-    @pyqtSlot()
-    def on_filter_action_triggered(self):
-        self.ui.btnSearchSelectFilter.setText("Filter")
-        self.ui.btnSearchSelectFilter.setIcon(QIcon.fromTheme("view-filter"))
-        self.set_search_ui_visibility(False)
-        self.ui.btnSearchSelectFilter.clicked.disconnect()
-        self.ui.btnSearchSelectFilter.clicked.connect(self.filter_search_results)
-
-    @pyqtSlot(bool)
-    def on_writeable_changed(self, writeable_status: bool):
-        hidden_rows = {i for i in range(self.protocol_model.row_count) if self.ui.tblViewProtocol.isRowHidden(i)}
-        self.protocol_model.is_writeable = writeable_status
-        self.proto_tree_model.set_copy_mode(writeable_status)
-        self.ui.cbDecoding.setDisabled(writeable_status)
-        self.refresh()
-        self.ui.tblViewProtocol.hide_row(hidden_rows)
-
-    @pyqtSlot()
-    def on_project_updated(self):
-        self.participant_list_model.update()
-        self.protocol_model.refresh_vertical_header()
-        self.active_message_type = self.proto_analyzer.default_message_type
-
-    @pyqtSlot(ProtocolLabel)
-    def on_label_removed(self, plabel: ProtocolLabel):
-        if not plabel.show:
-            self.show_all_cols()
-            for lbl in self.proto_analyzer.protocol_labels:
-                self.set_protocol_label_visibility(lbl)
-
-            self.ui.tblViewProtocol.resize_columns()
-
-        self.protocol_model.update()
-        self.protocol_label_list_model.update()
-        self.label_value_model.update()
-
-    @pyqtSlot(ProtocolLabel, MessageType)
-    def on_apply_decoding_changed(self, lbl: ProtocolLabel, message_type: MessageType):
-        for msg in self.proto_analyzer.messages:
-            if msg.message_type == message_type:
-                msg.clear_decoded_bits()
-                msg.clear_encoded_bits()
-
-    @pyqtSlot()
-    def on_label_selection_changed(self):
-        rows = [index.row() for index in self.ui.listViewLabelNames.selectedIndexes()]
-        if len(rows) == 0:
-            return
-
-        maxrow = numpy.max(rows)
-
-        label = self.protocol_label_list_model.message_type[maxrow]
-        if not label.show:
-            return
-
-        try:
-            message = next(msg for msg in self.proto_analyzer.messages if label if msg.message_type)
-        except StopIteration:
-            # No messages present
-            return
-        start, end = message.get_label_range(label, self.protocol_model.proto_view, True)
-        indx = self.protocol_model.index(0, int((start + end) / 2))
-
-        self.ui.tblViewProtocol.scrollTo(indx)
-
-    @pyqtSlot(int)
-    def on_undo_stack_index_changed(self, index: int):
-        self.protocol_model.update()
-        self.protocol_label_list_model.update()
-        self.search()
-
-    @pyqtSlot(ProtocolLabel)
-    def on_edit_label_clicked_in_table(self, proto_label: ProtocolLabel):
-
-        message_type = self.get_message_type_for_label(proto_label)
-        try:
-            self.show_protocol_label_dialog(message_type.index(proto_label))
-        except AttributeError:
-            self.show_protocol_label_dialog(0)
-
-    @pyqtSlot(int)
-    def on_edit_label_action_triggered(self, preselected_index: int):
-        self.show_protocol_label_dialog(preselected_index)
-
-    @pyqtSlot()
-    def on_protocol_view_changed(self):
-        old_view = self.protocol_model.proto_view
-        selected_indexes = self.ui.tblViewProtocol.selectionModel().selectedIndexes()
-        sel_cols = [index.column() for index in selected_indexes]
-        sel_rows = [index.row() for index in selected_indexes]
-
-        self.show_all_cols()
-        self.protocol_model.proto_view = self.ui.cbProtoView.currentIndex()
-        self.clear_search()
-
-        for lbl in self.proto_analyzer.protocol_labels:
-            self.set_protocol_label_visibility(lbl)
-
-        self.set_show_only_status()
-
-        self.restore_selection(old_view, sel_cols, sel_rows)
-
-    @pyqtSlot()
-    def on_item_in_proto_tree_dropped(self):
-        self.__protocols = None
-        self.set_shown_protocols()
-        self.ui.treeViewProtocols.clearSelection()
-
-    @pyqtSlot()
-    def on_tree_view_selection_changed(self):
-        indexes = self.ui.treeViewProtocols.selectedIndexes()
-
-        selected_items = [self.proto_tree_model.getItem(index) for index in indexes]
-
-        self.ui.tblViewProtocol.blockSignals(True)
-        active_group_ids = set()
-        sel = QItemSelection()
-
-        for item in selected_items:
-            if item.is_group:
-                active_group_ids.add(self.proto_tree_model.rootItem.index_of(item))
-            elif item.show:
-                active_group_ids.add(self.proto_tree_model.rootItem.index_of(item.parent()))
-
-        if len(active_group_ids) == 0:
-            active_group_ids.add(0)
-
-        if active_group_ids == set(self.active_group_ids):
-            ignore_table_model_on_update = True
-        else:
-            ignore_table_model_on_update = False
-            self.active_group_ids = list(active_group_ids)
-            self.active_group_ids.sort()
-
-        self.ui.tblViewProtocol.selectionModel().select(sel, QItemSelectionModel.ClearAndSelect)
-        self.ui.tblViewProtocol.blockSignals(False)
-
-        self.updateUI(ignore_table_model=ignore_table_model_on_update)
-
-    @pyqtSlot()
-    def on_table_selection_timer_timeout(self):
-        min_row, max_row, start, end = self.ui.tblViewProtocol.selection_range()
-
-        if min_row == max_row == start == end == -1:
-            self.ui.lBitsSelection.setText("")
-            self.ui.lDecimalSelection.setText("")
-            self.ui.lHexSelection.setText("")
-            self.ui.lNumSelectedColumns.setText("0")
-            self.ui.lblLabelValues.setText(self.tr("Label values for message "))
-            self.label_value_model.message_index = -1
-            self.active_message_type = self.proto_analyzer.default_message_type
-            self.__set_decoding_error_label(message=None)
-            return -1, -1
-
-        selected_messages = self.selected_messages
-
-        cur_view = self.ui.cbProtoView.currentIndex()
-        self.ui.lNumSelectedColumns.setText(str(end - start))
-
-        message = self.proto_analyzer.messages[min_row]
-        self.active_message_type = message.message_type
-
-        if cur_view == 1:
-            start *= 4
-            end *= 4
-        elif cur_view == 2:
-            start *= 8
-            end *= 8
-
-        bits = message.decoded_bits_str[start:end]
-        sym_ind = [i for i, b in enumerate(bits) if b not in ("0", "1")]
-        hex_bits = []
-        pos = 0
-        decimals = []
-        for si in sym_ind:
-            hb = bits[pos:si]
-            hex_bits.append("".join("{0:x}".format(int(hb[i:i + 4], 2)) for i in range(0, len(hb), 4)))
-            hex_bits.append(bits[si])
-
-            if len(hb) > 0:
-                decimals.append(str(int(hb, 2)))
-            decimals.append(bits[si])
-
-            pos = si + 1
-        hex_bits.append("".join("{0:x}".format(int(bits[pos:][i:i + 4], 2)) for i in range(0, len(bits[pos:]), 4)))
-        if len(bits[pos:]) > 0:
-            decimals.append(str(int(bits[pos:], 2)))
-
-        # hexs = "".join(["{0:x}".format(int(bits[i:i + 4], 2)) for i in range(0, len(bits), 4)])
-        hexs = "".join(hex_bits)
-
-        self.ui.lBitsSelection.setText(bits)
-        self.ui.lHexSelection.setText(hexs)
-        self.__set_decoding_error_label(message)
-        if len(decimals) > 0:
-            self.ui.lDecimalSelection.setText("".join(decimals))
-        else:
-            self.ui.lDecimalSelection.setText("")
-
-        self.ui.lblLabelValues.setText(self.tr("Label values for message #") + str(min_row + 1))
-        if min_row != self.label_value_model.message_index:
-            self.label_value_model.message_index = min_row
-
-        active_group_ids = set()
-        selection = QItemSelection()
-        self.selected_protocols.clear()
-
-        for group, tree_items in self.proto_tree_model.protocol_tree_items.items():
-            for i, tree_item in enumerate(tree_items):
-                proto = tree_item.protocol
-                if proto.show and proto in self.rows_for_protocols:
-                    if any(i in self.rows_for_protocols[proto] for i in range(min_row, max_row + 1)):
-                        active_group_ids.add(group)
-                        self.selected_protocols.add(proto)
-
-        if active_group_ids != set(self.active_group_ids):
-            self.active_group_ids = list(active_group_ids)
-            self.active_group_ids.sort()
-
-        self.ui.lblRSSI.setText(locale.format_string("%.2f", message.rssi))
-        if isinstance(message.absolute_time, str):
-            # For protocol files the abs time is the timestamp as string
-            abs_time = message.absolute_time
-        else:
-            abs_time = Formatter.science_time(message.absolute_time)
-
-        rel_time = Formatter.science_time(message.relative_time)
-        self.ui.lTime.setText("{0} (+{1})".format(abs_time, rel_time))
-
-        # Set Decoding Combobox
-        self.ui.cbDecoding.blockSignals(True)
-        different_encodings = False
-        enc = message.decoder
-        for message in selected_messages:
-            if message.decoder != enc:
-                different_encodings = True
-                break
-
-        if not different_encodings:
-            self.ui.cbDecoding.setCurrentText(message.decoder.name)
-        else:
-            self.ui.cbDecoding.setCurrentText("...")
-        self.ui.cbDecoding.blockSignals(False)
-
-        self.ui.treeViewProtocols.blockSignals(True)
-        self.ui.treeViewProtocols.selectionModel().select(selection, QItemSelectionModel.ClearAndSelect)
-        self.ui.treeViewProtocols.blockSignals(False)
-
-        self.updateUI(ignore_table_model=True, resize_table=False)
-
-    @pyqtSlot(int)
-    def on_ref_index_changed(self, new_ref_index: int):
-        if new_ref_index != -1:
-            i = 0
-            visible_protos = [proto for proto in self.protocol_list if proto.show]
-            for proto in visible_protos:
-                i += proto.num_messages
-                if i > new_ref_index:
-                    return
-
-        self.set_show_only_status()
-
-    @pyqtSlot(int)
-    def on_combobox_messagetype_index_changed(self, index: int):
-        self.active_message_type = self.proto_analyzer.message_types[index]
-
-    @pyqtSlot(MessageType, list)
-    def on_message_type_selected(self, message_type: MessageType, selected_messages: list):
-        for msg in selected_messages:
-            msg.message_type = message_type
-        self.active_message_type = message_type
-        self.protocol_model.update()
-
-    @pyqtSlot(str)
-    def on_message_type_name_edited(self, edited_str: str):
-        if self.active_message_type == self.proto_analyzer.message_types[self.ui.cbMessagetypes.currentIndex()]:
-            self.active_message_type.name = edited_str
-            self.ui.cbMessagetypes.setItemText(self.ui.cbMessagetypes.currentIndex(), edited_str)
-
-    @pyqtSlot(int)
-    def on_message_type_dialog_finished(self, status: int):
-        self.update_automatic_assigned_message_types()
-
-    @pyqtSlot()
-    def on_participant_edited(self):
-        self.refresh_assigned_participants_ui()
-
-    @pyqtSlot(str)
-    def on_label_shown_link_activated(self, link: str):
-        if link == "reset_filter":
-            self.ui.lineEditSearch.clear()
-            self.show_all_rows()

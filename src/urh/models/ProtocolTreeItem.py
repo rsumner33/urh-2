@@ -2,8 +2,6 @@ import copy
 
 from PyQt5.QtCore import Qt
 
-from urh.signalprocessing.Encoding import Encoding
-from urh.signalprocessing.Message import Message
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
 from urh.signalprocessing.ProtocolGroup import ProtocolGroup
 
@@ -18,7 +16,8 @@ class ProtocolTreeItem(object):
         """
         self.__itemData = data
         self.__parentItem = parent
-        self.__childItems = data.items if type(data) == ProtocolGroup else []  # type: list[ProtocolTreeItem]
+        self.__childItems = data.items if type(data) == ProtocolGroup else []
+        """:type: list of ProtocolTreeItem """
 
         self.copy_data = False  # For Writeable Mode in CFC
         self.__data_copy = None  # For Writeable Mode in CFC
@@ -28,19 +27,7 @@ class ProtocolTreeItem(object):
         if isinstance(self.__itemData, ProtocolAnalyzer):
             if self.copy_data:
                 if self.__data_copy is None:
-                    self.__data_copy = copy.deepcopy(self.__itemData)  # type: ProtocolAnalyzer
-
-                    # keep message types
-                    self.__data_copy.message_types = self.__itemData.message_types
-                    nrz = Encoding([""])
-                    for i, message in enumerate(self.__data_copy.messages):  # type: Message
-                        decoded_bits = message.decoded_bits
-                        message.decoder = nrz
-                        message.plain_bits = decoded_bits
-                        message.message_type = self.__itemData.messages[i].message_type
-
-                    self.__data_copy.qt_signals.show_state_changed.connect(self.__itemData.qt_signals.show_state_changed.emit)
-
+                    self.__data_copy = copy.deepcopy(self.__itemData)
                 return self.__data_copy
             else:
                 return self.__itemData
@@ -63,15 +50,15 @@ class ProtocolTreeItem(object):
         if self.is_group:
             return self.group_check_state
         else:
-            return self.protocol.show
+            return self.__itemData.show
 
     @show.setter
     def show(self, value: bool):
         value = Qt.Checked if value else Qt.Unchecked
 
         if not self.is_group:
-            self.protocol.show = value
-            self.protocol.qt_signals.show_state_changed.emit()
+            self.__itemData.show = value
+            self.__itemData.qt_signals.show_state_changed.emit()
         else:
             for child in self.__childItems:
                 child.__itemData.show = value
@@ -126,7 +113,10 @@ class ProtocolTreeItem(object):
         return 1
 
     def data(self):
-        return self.__itemData.name
+        display_name = self.__itemData.name
+        if isinstance(self.__itemData, ProtocolGroup):
+            display_name += " (%s)" % self.__itemData.decoding.name
+        return display_name
 
     def setData(self, value):
         self.__itemData.name = value

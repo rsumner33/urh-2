@@ -1,62 +1,40 @@
 from PyQt5.QtCore import QAbstractTableModel, pyqtSignal, Qt, QModelIndex
-from PyQt5.QtGui import QFont
 
-from urh.signalprocessing.Message import Message
-from urh.signalprocessing.MessageType import MessageType
 from urh.signalprocessing.ProtocoLabel import ProtocolLabel
-from urh.simulator.SimulatorProtocolLabel import SimulatorProtocolLabel
+from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
+from urh.signalprocessing.ProtocolGroup import ProtocolGroup
 
 
 class PLabelTableModel(QAbstractTableModel):
-    header_labels = ["Name", "Start", "End", 'Color', 'Apply decoding']
+    header_labels = ["Name", "Start", "End", 'Match exactly',
+                     "Matching Block", 'Color', 'Apply decoding', 'Delete']
 
+    restrictive_changed = pyqtSignal(int, bool)
     label_removed = pyqtSignal(ProtocolLabel)
-    special_status_label_changed = pyqtSignal(ProtocolLabel)
-    apply_decoding_changed = pyqtSignal(ProtocolLabel)
 
-    def __init__(self, message: Message, field_types, parent=None):
-        """
-
-        :param message:
-        :type field_types: list of FieldType
-        :param parent:
-        """
+    def __init__(self, proto_group: ProtocolGroup, offset:int, parent=None):
         super().__init__(parent)
-        self.row_count = len(message.message_type)
+        self.row_count = len(proto_group.labels)
         self.proto_view = 0
-        self.__message = None
-        self.message = message
-
-        self.message_type = message.message_type  # type: MessageType
-        self.field_types_by_caption = {ft.caption: ft for ft in field_types}
-        self.update()
-
-    @property
-    def message(self) -> Message:
-        return self.__message
-
-    @message.setter
-    def message(self, value: Message):
-        self.__message = value
-        # Ensure bit alignment positions in message are set
-        self.__message.split(decode=True)
-
-    def __get_label_at(self, index: int) -> ProtocolLabel:
-        result = self.message_type[index]
-        if isinstance(result, SimulatorProtocolLabel):
-            return result.label
-        else:
-            return result
+        self.proto_group = proto_group
+        self.protocol_labels = proto_group.labels
+        self.offset = offset
+        self.layoutChanged.emit()
 
     def update(self):
-        self.beginResetModel()
-        self.endResetModel()
+        self.protocol_labels = self.proto_group.labels
+        self.row_count = len(self.protocol_labels)
+        if self.row_count > 0:
+            i1 = self.createIndex(0, 0)
+            i2 = self.createIndex(self.row_count-1, len(self.header_labels)-1)
+            self.dataChanged.emit(i1, i2)
+        self.layoutChanged.emit()
 
-    def columnCount(self, parent: QModelIndex = None, *args, **kwargs):
+    def columnCount(self, QModelIndex_parent=None, *args, **kwargs):
         return len(self.header_labels)
 
-    def rowCount(self, parent: QModelIndex = None, *args, **kwargs):
-        return len(self.message_type)
+    def rowCount(self, QModelIndex_parent=None, *args, **kwargs):
+        return len(self.protocol_labels)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
@@ -64,62 +42,72 @@ class PLabelTableModel(QAbstractTableModel):
         return super().headerData(section, orientation, role)
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
-        i, j = index.row(), index.column()
         if role == Qt.DisplayRole:
-            try:
-                lbl = self.message_type[i]
-            except IndexError:
-                return False
+            i = index.row()
+            j = index.column()
+            lbl = self.protocol_labels[i]
             if j == 0:
                 return lbl.name
             elif j == 1:
-                return self.message.get_label_range(lbl, view=self.proto_view, decode=True)[0] + 1
+                return self.proto_group.get_label_range(lbl, self.proto_view, True)[0] + 1
             elif j == 2:
-                return self.message.get_label_range(lbl, view=self.proto_view, decode=True)[1]
+                return self.proto_group.get_label_range(lbl, self.proto_view, True)[1]
             elif j == 3:
-                return lbl.color_index
+                return lbl.restrictive
             elif j == 4:
+                if lbl.restrictive:
+                    return lbl.refblock + self.offset + 1
+                else:
+                    return "-"
+            elif j == 5:
+                return lbl.color_index
+            elif j == 6:
                 return lbl.apply_decoding
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignCenter
-        elif role == Qt.FontRole and j == 0:
-            font = QFont()
-            font.setItalic(self.message_type[i].field_type is None)
-            return font
         else:
             return None
 
-    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
+    def setData(self, index: QModelIndex, value, role=Qt.DisplayRole):
         if value == "":
             return True
 
         i = index.row()
         j = index.column()
-        if i >= len(self.message_type):
+        if i >= len(self.protocol_labels):
             return False
 
-        lbl = self.__get_label_at(i)
+        lbl = self.protocol_labels[i]
+        proto = self.proto_group.decoded_bits_str
 
         if j == 0:
             lbl.name = value
-            type_before = type(lbl)
-            self.message_type.change_field_type_of_label(lbl, self.field_types_by_caption.get(value, None))
-
-            lbl = self.__get_label_at(i)
-
-            if type_before != ProtocolLabel or type(lbl) != ProtocolLabel:
-                self.special_status_label_changed.emit(lbl)
-
         elif j == 1:
-            lbl.start = self.message.convert_index(int(value - 1), from_view=self.proto_view, to_view=0, decoded=True)[0]
+            new_start = int(self.proto_group.convert_index(int(value) - 1, self.proto_view, 0, True, i)[0])
+            lbl.start = new_start
+            # lbl.refblock passt hier wahrscheinlich nicht
+            lbl.reference_bits = proto[lbl.refblock][lbl.start:lbl.end]
+            lbl.find_block_numbers(proto)
         elif j == 2:
-            lbl.end = self.message.convert_index(int(value), from_view=self.proto_view, to_view=0, decoded=True)[0]
+            new_end = int(self.proto_group.convert_index(int(value) - 1, self.proto_view, 0, True, i)[1]) + 1
+            lbl.end = new_end
+            lbl.reference_bits = proto[lbl.refblock][lbl.start:lbl.end]
+            lbl.find_block_numbers(proto)
         elif j == 3:
-            lbl.color_index = value
+            lbl.restrictive = value
+            lbl.reference_bits = proto[lbl.refblock][lbl.start:lbl.end]
+            self.restrictive_changed.emit(i, value)
+            lbl.find_block_numbers(proto)
         elif j == 4:
-            if bool(value) != lbl.apply_decoding:
-                lbl.apply_decoding = bool(value)
-                self.apply_decoding_changed.emit(lbl)
+            lbl.refblock = int(value) - self.offset - 1
+            lbl.reference_bits = proto[lbl.refblock][lbl.start:lbl.end]
+            lbl.find_block_numbers(proto)
+        elif j == 5:
+            lbl.color_index = value
+        elif j == 6:
+            lbl.apply_decoding = bool(value)
+        elif j == 7:
+            self.remove_label(self.protocol_labels[i])
 
         return True
 
@@ -128,20 +116,16 @@ class PLabelTableModel(QAbstractTableModel):
             return Qt.NoItemFlags
 
         try:
-            _ = self.message_type[index.row()]
+            lbl = self.protocol_labels[index.row()]
         except IndexError:
             return Qt.NoItemFlags
 
-        return Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        if index.column() == 4 and not lbl.restrictive:
+            return Qt.ItemIsSelectable
+
+        return Qt.ItemIsEditable | Qt.ItemIsEnabled
 
     def remove_label(self, label):
-        self.message_type.remove(label)
+        self.proto_group.remove_label(label)
         self.update()
         self.label_removed.emit(label)
-
-    def remove_label_at(self, index: int):
-        try:
-            label = self.message_type[index]
-            self.remove_label(label)
-        except IndexError:
-            pass

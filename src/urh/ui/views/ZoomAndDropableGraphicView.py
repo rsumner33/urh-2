@@ -67,3 +67,22 @@ class ZoomAndDropableGraphicView(ZoomableGraphicView):
         self.proto_analyzer = None
         self.signal_tree_root = None
         super().eliminate()
+        self.horizontalScrollBar().blockSignals(True)
+
+        self.scene_creator = SignalSceneManager(signal, self)
+        self.scene_creator.init_scene()
+        self.setScene(self.scene_creator.scene)
+        self.scene_creator.show_full_scene()
+        self.fitInView(self.sceneRect())
+        self.signal_loaded.emit(proto_analyzer)
+        self.signal = signal
+        self.proto_analyzer = proto_analyzer
+
+        self.horizontalScrollBar().blockSignals(False)
+
+
+    def handle_signal_zoomed_or_scrolled(self):
+        if self.scene_creator is not None:
+            x1 = self.view_rect().x()
+            x2 = x1 + self.view_rect().width()
+            self.scene_creator.show_scene_section(x1, x2)

@@ -49,6 +49,9 @@ class CompareFrameController(QFrame):
 
         self.ui = Ui_FAnalysis()
         self.ui.setupUi(self)
+        util.set_splitter_stylesheet(self.ui.splitter)
+        util.set_splitter_stylesheet(self.ui.splitter_2)
+
         self.ui.lBitsSelection.setText("")
         self.ui.lDecimalSelection.setText("")
         self.ui.lHexSelection.setText("")

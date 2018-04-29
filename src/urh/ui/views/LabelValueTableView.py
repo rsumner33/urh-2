@@ -25,6 +25,18 @@ class LabelValueTableView(QTableView):
         menu = self.create_context_menu()
         menu.exec_(self.mapToGlobal(event.pos()))
 
+    def create_context_menu(self):
+        menu = QMenu()
+        if self.model().rowCount() > 0:
+            edit_label_action = menu.addAction(self.tr("Edit labels..."))
+            edit_label_action.setIcon(QIcon.fromTheme("configure"))
+            edit_label_action.triggered.connect(self.on_edit_label_action_triggered)
+        return menu
+
+    def contextMenuEvent(self, event: QContextMenuEvent):
+        menu = self.create_context_menu()
+        menu.exec_(self.mapToGlobal(event.pos()))
+
     def model(self) -> LabelValueTableModel:
         return super().model()
 

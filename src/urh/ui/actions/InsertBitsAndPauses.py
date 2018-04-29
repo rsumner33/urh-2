@@ -1,5 +1,3 @@
-import copy
-
 from PyQt5.QtWidgets import QUndoCommand
 
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer

@@ -327,8 +327,10 @@ class MainController(QMainWindow):
 
         signal.blockSignals(True)
         has_entry = self.project_manager.read_project_file_for_signal(signal)
-        if not has_entry:
+
+        if not has_entry and not signal.changed:
             signal.auto_detect()
+
         signal.blockSignals(False)
         self.ui.progressBar.setValue(50)
         QApplication.processEvents()
@@ -669,6 +671,9 @@ class MainController(QMainWindow):
         enable = len(self.signal_protocol_dict) > 0
         self.ui.actionSaveAllSignals.setEnabled(enable)
         self.ui.actionClose_all.setEnabled(enable)
+
+        if "spectrogram_colormap" in changed_options:
+            self.signal_tab_controller.redraw_spectrograms()
 
     @pyqtSlot()
     def on_new_project_clicked(self):

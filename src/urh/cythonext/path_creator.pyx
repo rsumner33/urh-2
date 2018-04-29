@@ -17,6 +17,7 @@ import  cython
 from cython.parallel import prange
 
 from urh import constants
+import math
 
 cpdef create_path(float[:] samples, long long start, long long end):
     cdef float[::1] values

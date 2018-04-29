@@ -2,7 +2,7 @@ from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import QDialog, QHBoxLayout
 
-from urh import constants
+from urh import constants, colormaps
 from urh.controller.PluginController import PluginController
 from urh.ui.ui_options import Ui_DialogOptions
 
@@ -30,6 +30,19 @@ class OptionsController(QDialog):
     def create_connects(self):
         self.ui.spinBoxSymbolTreshold.valueChanged.connect(self.handle_spinbox_symbol_treshold_value_changed)
         self.ui.chkBoxEnableSymbols.clicked.connect(self.on_chkbox_enable_symbols_clicked)
+
+    def show_available_colormaps(self):
+        height = 50
+
+        selected = colormaps.read_selected_colormap_name_from_settings()
+        for colormap_name in sorted(colormaps.maps.keys()):
+            image = Spectrogram.create_colormap_image(colormap_name, height=height)
+            rb = QRadioButton(colormap_name)
+            rb.setObjectName(colormap_name)
+            rb.setChecked(colormap_name == selected)
+            rb.setIcon(QIcon(QPixmap.fromImage(image)))
+            rb.setIconSize(QSize(256, height))
+            self.ui.scrollAreaWidgetSpectrogramColormapContents.layout().addWidget(rb)
 
     def closeEvent(self, event: QCloseEvent):
         changed_values = {}

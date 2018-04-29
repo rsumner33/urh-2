@@ -6,7 +6,7 @@ from PyQt5.QtGui import QDropEvent, QDragEnterEvent
 from PyQt5.QtWidgets import QDialog, QTableWidgetItem, QGraphicsScene, QApplication
 
 from urh import constants
-from urh.SignalSceneManager import SignalSceneManager
+from urh.signalprocessing.Encoding import Encoding
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
 from urh.signalprocessing.Signal import Signal
 from urh.signalprocessing.encoding import encoding

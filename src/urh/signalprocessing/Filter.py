@@ -8,6 +8,8 @@ from urh.cythonext import signalFunctions
 from urh.util import util
 from urh.util.Logger import logger
 
+from urh.util.Logger import logger
+
 
 class FilterType(Enum):
     moving_average = "moving average"

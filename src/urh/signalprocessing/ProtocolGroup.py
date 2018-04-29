@@ -85,12 +85,15 @@ class ProtocolGroup(object):
 
     def __repr__(self):
         return "Group: {0}".format(self.name)
-
-    def add_protocol_item(self, protocol_item):
+   def add_protocol_item(self, protocol_item):
         """
         This is intended for adding a protocol item directly to the group
 
         :type protocol: ProtocolTreeItem
         :return:
         """
+<<        self.__items.append(protocol_item) # Warning: parent is None!
+>>>>>>>+HEAD
+=====
         self.__items.append(protocol_item) # Warning: parent is None!
+>>>>>>> b1ae517... Inital Commit

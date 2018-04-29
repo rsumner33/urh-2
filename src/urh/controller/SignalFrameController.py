@@ -338,7 +338,7 @@ class SignalFrameController(QFrame):
     def change_signal_name(self):
         self.signal.name = self.ui.lineEditSignalName.text()
 
-    def __set_spectrogram_adjust_widgets_visibility(self):
+<    def __set_spectrogram_adjust_widgets_visibility(self):
         self.ui.labelFFTWindowSize.setVisible(self.ui.cbSignalView.currentIndex() == 2)
         self.ui.sliderFFTWindowSize.setVisible(self.ui.cbSignalView.currentIndex() == 2)
         self.ui.labelSpectrogramMin.setVisible(self.ui.cbSignalView.currentIndex() == 2)
@@ -356,6 +356,9 @@ class SignalFrameController(QFrame):
             bw = (num_samples / self.ui.gvSpectrogram.height_spectrogram) * self.signal.sample_rate
             self.ui.lDuration.setText(Formatter.big_value_with_suffix(bw) + "Hz")
 
+>>>>>>>+HEAD
+======
+>>>>>>> b1ae517... Inital Commit
     def __set_duration(self):  # On Signal Sample Rate changed
         try:
             nsamples = int(self.ui.lNumSelectedSamples.text())
@@ -384,7 +387,7 @@ class SignalFrameController(QFrame):
 
     def handle_slideryscale_value_changed(self):
         try:
-            gv = self.ui.gvSignal if self.ui.stackedWidget.currentIndex() == 0 else self.ui.gvSpectrogram
+<            gv = self.ui.gvSignal if self.ui.stackedWidget.currentIndex() == 0 else self.ui.gvSpectrogram
             yscale = self.ui.sliderYScale.value()
             current_factor = gv.sceneRect().height() / gv.view_rect().height()
             gv.scale(1, yscale / current_factor)
@@ -405,7 +408,19 @@ class SignalFrameController(QFrame):
     def on_slider_spectrogram_max_value_changed(self):
         self.spectrogram_update_timer.start()
 
-    def mousePressEvent(self, event):
+>>>>>>>+HEAD
+======
+             gvs = self.ui.gvSignal
+            yscale = self.ui.sliderYScale.value()
+            current_factor = gvs.sceneRect().height() / gvs.view_rect().height()
+            gvs.scale(1, yscale / current_factor)
+            x, w = self.ui.gvSignal.view_rect().x(), self.ui.gvSignal.view_rect().width()
+            gvs.centerOn(x + w / 2, gvs.y_center)
+        except ZeroDivisionError:
+            pass
+
+>>>>>>>-b1ae517
+   def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_started.emit(self.mapToParent(event.pos()))
             drag = QDrag(self)
@@ -734,9 +749,12 @@ class SignalFrameController(QFrame):
 
             self.ui.gvSignal.zoom_to_selection(samplepos, samplepos + nsamples)
         else:
-            self.ui.gvSignal.clear_horizontal_selection()
-
-        self.protocol_selection_is_updateable = True
+<<<            self.ui.gvSignal.clear_horizontal_selection()
+>>>>>>>+HEAD
+====
+               self.ui.gvSignal.set_selection_area(0, 0)
+>>>>>>>-b1ae517
+      self.protocol_selection_is_updateable = True
         self.update_protocol_selection_from_roi()
 
     @pyqtSlot()
@@ -808,8 +826,12 @@ class SignalFrameController(QFrame):
             else:
                 self.ui.gvSignal.set_selection_area(samplepos, nsamples)
         else:
-            self.ui.gvSignal.clear_horizontal_selection()
-        self.ui.gvSignal.blockSignals(False)
+<<<            self.ui.gvSignal.clear_horizontal_selection()
+>>>>>>>+HEAD
+====
+               self.ui.gvSignal.set_selection_area(0, 0)
+>>>>>>>-b1ae517
+     self.ui.gvSignal.blockSignals(False)
 
         self.update_nselected_samples()
 
@@ -1131,4 +1153,8 @@ class SignalFrameController(QFrame):
         """
         if self.signal.auto_detect_on_modulation_changed:
             self.signal.auto_detect_on_modulation_changed = False
+<<<<<<            self.ui.btnAutoDetect.setChecked(False)
+>>>>>>>+HEAD
+=
             self.ui.btnAutoDetect.setChecked(False)
+>>>>>>> b1ae517... Inital Commit

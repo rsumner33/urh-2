@@ -258,7 +258,7 @@ class Signal(QObject):
         return signal_functions.find_signal_end(self.qad, self.modulation_type)
 
     def quad_demod(self):
-        return signal_functions.afp_demod(self.data, self.noise_threshold, self.modulation_type)
+<        return signal_functions.afp_demod(self.data, self.noise_threshold, self.modulation_type)
 
     def calc_noise_threshold(self, noise_start: int, noise_end: int):
         num_digits = 4
@@ -274,7 +274,15 @@ class Signal(QObject):
         except ValueError:
             logger.warning("Could not calculate noise threshold for range {}-{}".format(noise_start, noise_end))
             return self.noise_threshold
+>>>>>>>+HEAD
+======
+         return signal_functions.afp_demod(self.data, self.noise_treshold, self.modulation_type)
 
+    def calc_noise_treshold(self, noise_start, noise_end):
+        NDIGITS = 4
+        self.noise_treshold = np.ceil(
+            np.max(np.absolute(self.data[noise_start:noise_end])) * 10 ** NDIGITS) / 10 ** NDIGITS
+>>>>>>>-b1ae517
     def estimate_bitlen(self) -> int:
         bit_len = self.__parameter_cache[self.modulation_type_str]["bit_len"]
         if bit_len is None:
@@ -285,13 +293,17 @@ class Signal(QObject):
     def estimate_qad_center(self) -> float:
         center = self.__parameter_cache[self.modulation_type_str]["qad_center"]
         if center is None:
-            noise_value = signal_functions.get_noise_for_mod_type(int(self.modulation_type))
-            qad = self.qad[np.where(self.qad > noise_value)] if noise_value < 0 else self.qad
+<            noise_value = signal_functions.get_noise_for_mod_type(int(self.modulation_type))
+>>>>>>>+HEAD
+======
+             noise_value = signal_functions.get_noise_for_mod_type(self.modulation_type)
+>>>>>>>-b1ae517
+           qad = self.qad[np.where(self.qad > noise_value)] if noise_value < 0 else self.qad
             center = signal_functions.estimate_qad_center(qad, constants.NUM_CENTERS)
             self.__parameter_cache[self.modulation_type_str]["qad_center"] = center
         return center
 
-    def create_new(self, start=0, end=0, new_data=None):
+<    def create_new(self, start=0, end=0, new_data=None):
         new_signal = Signal("", "New " + self.name)
 
         if new_data is None:
@@ -303,7 +315,20 @@ class Signal(QObject):
         new_signal.noise_min_plot = self.noise_min_plot
         new_signal.noise_max_plot = self.noise_max_plot
         new_signal.__bit_len = self.bit_len
-        new_signal.__qad_center = self.qad_center
+>>>>>>>+HEAD
+======
+     def create_new(self, start:int, end:int):
+        new_signal = Signal("", "New " + self.name)
+        new_signal._fulldata = self.data[start:end]
+        new_signal._num_samples = end - start
+        new_signal._noise_treshold = self.noise_treshold
+        new_signal.noise_min_plot = self.noise_min_plot
+        new_signal.noise_max_plot = self.noise_max_plot
+        new_signal.__bit_len = self.bit_len
+        new_signal.history = [("Crop", 0, len(self._fulldata))]
+        new_signal.cur_history_index = 0
+>>>>>>>-b1ae517
+       new_signal.__qad_center = self.qad_center
         new_signal.changed = True
         return new_signal
 
@@ -331,7 +356,7 @@ class Signal(QObject):
 
     def estimate_frequency(self, start: int, end: int, sample_rate: float):
         """
-        Estimate the frequency of the baseband signal using FFT
+<        Estimate the frequency of the baseband signal using FFT
 
         :param start: Start of the area that shall be investigated
         :param end: End of the area that shall be investigated
@@ -411,3 +436,28 @@ class Signal(QObject):
         signal._fulldata = samples
 
         return signal
+>>>>>>>+HEAD
+======
+        Schätzt die Frequenz des Basissignals mittels FFT
+
+        :param start: Start des Bereichs aus dem untersucht werden soll
+        :param end: Ende des Bereichs aus dem untersucht werden soll
+        :param sample_rate: Die Sample Rate mit der das Signal aufgenommen wurde
+        :return:
+        """
+        data = self.data[start:end]
+
+        w = np.fft.fft(data)
+        freqs = np.fft.fftfreq(len(w))
+        idx = np.argmax(np.abs(w))
+        freq = freqs[idx]
+        freq_in_hertz = abs(freq * sample_rate)
+        return freq_in_hertz
+
+    def destroy(self):
+        self._fulldata = None
+        self._qad = None
+
+    def silent_set_modulation_type(self, mod_type: int):
+        self.__modulation_type = mod_type
+>>>>>>> b1ae517... Inital Commit

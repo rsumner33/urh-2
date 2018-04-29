@@ -144,3 +144,46 @@ class Modulator(object):
         else:
             self.data = data
 
+<<<>>>>>>>+HEAD
+====
+        mod_type = self.MODULATION_TYPES[self.modulation_type]
+        total_samples = sum(bit.nsamples if type(bit) == Symbol else self.samples_per_bit for bit in data) + pause
+
+        self.modulated_samples = np.zeros(total_samples, dtype=np.complex64)
+
+        # Lets build a paramvector
+        paramvector = np.empty(total_samples - pause, dtype=np.float64)
+        sample_pos = 0
+
+        for i, bit in enumerate(data):
+            if type(bit) == Symbol:
+                samples_per_bit = bit.nsamples
+                log_bit = True if bit.pulsetype == 1 else False
+            else:
+                log_bit = bit
+                samples_per_bit = self.samples_per_bit
+
+            param = self.param_for_one if log_bit else self.param_for_zero
+            paramvector[sample_pos:sample_pos + samples_per_bit] = np.full(samples_per_bit, param, dtype=np.float64)
+            sample_pos += samples_per_bit
+
+        t = np.arange(start, start + total_samples - pause) / self.sample_rate
+        a = paramvector / 100 if mod_type == "ASK" else self.carrier_amplitude
+        phi = paramvector * (np.pi / 180) if mod_type == "PSK" else self.carrier_phase_deg * (np.pi / 180)
+        f = paramvector if mod_type == "FSK" else self.carrier_freq_hz
+
+        self.modulated_samples.imag[:total_samples - pause] = a * np.sin(2 * np.pi * f * t + phi)
+        self.modulated_samples.real[:total_samples - pause] = a * np.cos(2 * np.pi * f * t + phi)
+
+
+    @staticmethod
+    def get_value_with_suffix(value):
+        if abs(value) >= 10 ** 9:
+            return locale.format_string("%.4fG", value / 10 ** 9)
+        elif abs(value) >= 10 ** 6:
+            return locale.format_string("%.4fM", value / 10 ** 6)
+        elif abs(value) >= 10 ** 3:
+            return locale.format_string("%.4fk",value / 10 ** 3)
+        else:
+            return locale.format_string("%f", value)
+>>>>>>> b1ae517... Inital Commit

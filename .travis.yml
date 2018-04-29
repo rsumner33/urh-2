@@ -22,6 +22,9 @@ matrix:
 notifications:
   email: false
 
+notifications:
+  email: false
+
 branches:
   only:
     - master

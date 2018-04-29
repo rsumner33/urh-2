@@ -111,7 +111,6 @@ class OptionsController(QDialog):
         else:
             self.ui.spinBoxSymbolTreshold.setValue(50)
 
-
     @staticmethod
     def write_default_options():
         settings = constants.SETTINGS

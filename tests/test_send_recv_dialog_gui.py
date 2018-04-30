@@ -8,6 +8,7 @@ from PyQt5.QtCore import QDir, QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
+from multiprocessing import Process, Value, Array
 
 from tests.QtTestCase import QtTestCase
 from tests.utils_testing import get_path_for_data_file

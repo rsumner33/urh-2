@@ -40,16 +40,12 @@ class SelectableGraphicView(QGraphicsView):
         return super().scene()
 
     @property
-    def selection_area(self) -> HorizontalSelection:
+    def selection_area(self) -> ROI:
         return self.scene().selection_area
 
     @selection_area.setter
     def selection_area(self, value):
         self.scene().selection_area = value
-
-    @property
-    def has_horizontal_selection(self) -> bool:
-        return isinstance(self.scene().selection_area, HorizontalSelection)
 
     @property
     def hold_shift_to_drag(self) -> bool:

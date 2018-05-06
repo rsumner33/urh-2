@@ -91,4 +91,3 @@ class Ui_Interpretation(object):
         self.lShiftStatus.setText(_translate("Interpretation", "Statusinformationen like a Bozz"))
 
 from urh.ui.ScrollArea import ScrollArea
-from . import urh_rc

@@ -4,6 +4,7 @@ import sys
 import tempfile
 from subprocess import call
 
+sys.dont_write_bytecode = True
 build_dir = os.path.join(tempfile.gettempdir(), "build")
 
 def get_python3_interpreter():

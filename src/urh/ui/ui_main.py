@@ -213,7 +213,6 @@ class Ui_MainWindow(object):
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addAction(self.actionRecord)
         self.menuFile.addAction(self.actionSniff_protocol)
-        self.menuFile.addAction(self.actionSpectrum_Analyzer)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSaveAllSignals)
         self.menuFile.addAction(self.actionClose_all)

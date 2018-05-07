@@ -86,6 +86,10 @@ class Modulator(object):
         return self.MODULATION_TYPES[self.modulation_type]
 
     @property
+    def modulation_type_verbose_str(self):
+        return self.MODULATION_TYPES_VERBOSE[self.modulation_type]
+
+    @property
     def param_for_zero_str(self):
         mod = self.MODULATION_TYPES[self.modulation_type]
         if mod == "ASK":

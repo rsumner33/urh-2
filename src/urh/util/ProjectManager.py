@@ -10,7 +10,7 @@ from urh.signalprocessing.Modulator import Modulator
 from urh.signalprocessing.ProtocoLabel import ProtocolLabel
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
 from urh.signalprocessing.Signal import Signal
-from urh.util import FileOperator
+from urh.util import FileOperator, util
 
 
 class ProjectManager(QObject):
@@ -172,12 +172,12 @@ class ProjectManager(QObject):
 
         tree.write(self.project_file)
 
-    def write_modulators_to_project_file(self, modulators, tree=None):
+    def write_modulators_to_project_file(self, tree=None):
         """
         :type modulators: list of Modulator
         :return:
         """
-        if self.project_file is None or not modulators:
+        if self.project_file is None or not self.modulators:
             return
 
         if tree is None:
@@ -205,10 +205,13 @@ class ProjectManager(QObject):
         """
         :rtype: list of Modulator
         """
-        if not self.project_file:
+        return self.read_modulators_from_file(self.project_file)
+
+    def read_modulators_from_file(self, filename: str):
+        if not filename:
             return []
 
-        tree = ET.parse(self.project_file)
+        tree = ET.parse(filename)
         root = tree.getroot()
 
         result = []

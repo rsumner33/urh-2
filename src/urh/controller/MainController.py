@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import QMainWindow, QUndoGroup, QActionGroup, QHeaderView, 
 from urh import constants
 from urh import version
 from urh.controller.CompareFrameController import CompareFrameController
-from urh.controller.DecoderWidgetController import DecoderWidgetController
+from urh.controller.dialogs.DecoderDialog import DecoderDialog
 from urh.controller.GeneratorTabController import GeneratorTabController
 from urh.controller.OptionsController import OptionsController
 from urh.controller.ProjectDialogController import ProjectDialogController
@@ -54,6 +54,13 @@ class MainController(QMainWindow):
                                                                self.project_manager,
                                                                self.compare_frame_controller.decodings,
                                                                parent=self.ui.tab_generator)
+
+        self.simulator_tab_controller = SimulatorTabController(parent=self.ui.tab_simulator,
+                                                               compare_frame_controller=self.compare_frame_controller,
+                                                               generator_tab_controller=self.generator_tab_controller,
+                                                               project_manager=self.project_manager)
+
+        self.ui.tab_simulator.layout().addWidget(self.simulator_tab_controller)
 
         self.undo_group = QUndoGroup()
         self.undo_group.addStack(self.signal_tab_controller.signal_undo_stack)
@@ -767,7 +774,7 @@ class MainController(QMainWindow):
     @pyqtSlot()
     def show_decoding_dialog(self):
         signals = [sf.signal for sf in self.signal_tab_controller.signal_frames]
-        decoding_controller = DecoderWidgetController(
+        decoding_controller = DecoderDialog(
             self.compare_frame_controller.decodings, signals,
             self.project_manager, parent=self)
         decoding_controller.finished.connect(self.update_decodings)
@@ -832,7 +839,7 @@ class MainController(QMainWindow):
             r.close()
             return
 
-        r.recording_parameters.connect(pm.set_recording_parameters)
+        r.device_parameters_changed.connect(pm.set_device_parameters)
         r.show()
 
     @pyqtSlot(list)

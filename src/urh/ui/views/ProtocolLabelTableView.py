@@ -7,10 +7,17 @@ class ProtocolLabelTableView(QTableView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.delete_action = QAction("Delete selected labels", self)
+        self.delete_action.setShortcut(QKeySequence.Delete)
+        self.delete_action.setIcon(QIcon.fromTheme("edit-delete"))
+        self.delete_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self.delete_action.triggered.connect(self.delete_selected_rows)
+        self.addAction(self.delete_action)
+
     def model(self) -> PLabelTableModel:
         return super().model()
 
-    def contextMenuEvent(self, event):
+    def create_context_menu(self):
         menu = QMenu()
         pos = event.pos()
         row = self.rowAt(pos.y())

@@ -108,6 +108,14 @@ class CompareFrameController(QFrame):
         self.proto_tree_model.group_added.connect(self.handle_group_added)
 
     @property
+    def field_types(self):
+        return self.project_manager.field_types
+
+    @property
+    def field_types_by_caption(self):
+        return self.project_manager.field_types_by_caption
+
+    @property
     def active_group_ids(self):
         """
         Returns a list of currently selected group indices

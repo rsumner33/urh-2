@@ -124,7 +124,7 @@ class GeneratorTabController(QWidget):
 
     def refresh_modulators(self):
         current_index = 0
-        if type(self.sender()) == ModulatorDialogController:
+        if type(self.sender()) == ModulatorDialog:
             current_index = self.sender().ui.comboBoxCustomModulations.currentIndex()
         self.ui.cBoxModulations.clear()
         for modulator in self.modulators:

@@ -43,6 +43,7 @@ class ProtocolSniffer(ProtocolAnalyzer, QObject):
         self.rcv_device.started.connect(self.__emit_started)
         self.rcv_device.stopped.connect(self.__emit_stopped)
 
+        self.real_time = real_time
         self.data_cache = []
         self.reading_data = False
         self.adaptive_noise = False

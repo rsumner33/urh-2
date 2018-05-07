@@ -44,7 +44,7 @@ class ProtocolLabel(object):
         self.reference_bits = ""
         self.show = Qt.Checked
 
-        self.fuzz_me = Qt.Checked
+        self.__fuzz_me = Qt.Checked
         self.fuzz_values = []
 
         self.display_type_index = 0

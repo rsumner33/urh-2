@@ -1,3 +1,4 @@
+import array
 import copy
 import math
 import random

@@ -35,6 +35,16 @@ def profile(func):
     return func_wrapper
 
 
+def profile(func):
+    def func_wrapper(*args):
+        t = time.perf_counter()
+        result = func(*args)
+        print("{} took {:.2f}ms".format(func, 1000 * (time.perf_counter() - t)))
+        return result
+
+    return func_wrapper
+
+
 def set_icon_theme():
     if sys.platform != "linux" or constants.SETTINGS.value("icon_theme_index", 0, int) == 0:
         # noinspection PyUnresolvedReferences

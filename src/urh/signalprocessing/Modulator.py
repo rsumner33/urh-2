@@ -144,8 +144,6 @@ class Modulator(object):
         else:
             self.data = data
 
-<<<>>>>>>>+HEAD
-====
         mod_type = self.MODULATION_TYPES[self.modulation_type]
         total_samples = sum(bit.nsamples if type(bit) == Symbol else self.samples_per_bit for bit in data) + pause
 
@@ -186,4 +184,3 @@ class Modulator(object):
             return locale.format_string("%.4fk",value / 10 ** 3)
         else:
             return locale.format_string("%f", value)
->>>>>>> b1ae517... Inital Commit

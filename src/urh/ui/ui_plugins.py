@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
+# Form implementation generated from reading ui file '../ui/plugins.ui'
 #
+# Created by: PyQt5 UI code generator 5.5.1
 #
 # WARNING! All changes made in this file will be lost!
 
@@ -51,7 +53,7 @@ class Ui_FramePlugins(object):
         self.horizontalLayout.addLayout(self.verticalLayout)
         self.verticalLayout_3.addLayout(self.horizontalLayout)
         self.groupBoxSettings = QtWidgets.QGroupBox(FramePlugins)
-        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.groupBoxSettings.sizePolicy().hasHeightForWidth())

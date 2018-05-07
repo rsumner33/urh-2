@@ -864,22 +864,6 @@ class MainController(QMainWindow):
                 sf.refresh_protocol()
 
         self.apply_default_view()
-<
-    def refresh_main_menu(self):
-        enable = len(self.signal_protocol_dict) > 0
-        self.ui.actionSaveAllSignals.setEnabled(enable)
-        self.ui.actionClose_all.setEnabled(enable)
-
-<        if "spectrogram_colormap" in changed_options:
-            self.signal_tab_controller.redraw_spectrograms()
-
->>>>>>>+HEAD
-======
->>>>>>>>-b1ae517
-   @pyqtSlot()
->>>>>>>+master
-======
-
 
     def refresh_main_menu(self):
         enable = len(self.signal_protocol_dict) > 0
@@ -887,8 +871,6 @@ class MainController(QMainWindow):
         self.ui.actionClose_all.setEnabled(enable)
 
     @pyqtSlot()
->>>>>>>-f2fec0d
-   def on_new_project_clicked(self):
         pdc = ProjectDialogController(parent=self)
         pdc.finished.connect(self.on_project_dialog_finished)
         pdc.show()

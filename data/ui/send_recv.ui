@@ -761,5 +761,38 @@ image: url(:/icons/icons/splitter_handle_vertical.svg);
  <resources>
   <include location="urh.qrc"/>
  </resources>
- <connections/>
+ <connections>
+  <connection>
+   <sender>groupBoxSniffSettings</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>frame</receiver>
+   <slot>setVisible(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>78</x>
+     <y>527</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>210</x>
+     <y>536</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>groupBoxDeviceSettings</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>frame_2</receiver>
+   <slot>setVisible(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>63</x>
+     <y>24</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>88</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
 </ui>
